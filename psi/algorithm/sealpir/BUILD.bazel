@@ -65,6 +65,24 @@ cc_proto_library(
 )
 
 psi_cc_test(
+    name = "seal_bfv_test",
+    srcs = ["seal_bfv_test.cc"],
+    deps = [
+        "@seal",
+        "@yacl//yacl/utils:elapsed_timer",
+    ],
+)
+
+psi_cc_test(
+    name = "seal_ckks_test",
+    srcs = ["seal_ckks_test.cc"],
+    deps = [
+        "@seal",
+        "@yacl//yacl/utils:elapsed_timer",
+    ],
+)
+
+psi_cc_test(
     name = "seal_pir_test",
     srcs = ["seal_pir_test.cc"],
     deps = [
