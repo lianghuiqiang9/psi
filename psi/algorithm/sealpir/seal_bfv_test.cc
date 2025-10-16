@@ -8,12 +8,12 @@ using namespace std;
 using namespace seal;
 
 int main() {
-  uint64_t plain_modulus_length = 20;
   uint64_t poly_modulus_degree = 8192;
   EncryptionParameters parms = EncryptionParameters(scheme_type::bfv);
   parms.set_poly_modulus_degree(poly_modulus_degree);
-  parms.set_plain_modulus(
-      PlainModulus::Batching(poly_modulus_degree, plain_modulus_length));
+  // parms.set_plain_modulus(
+  //     PlainModulus::Batching(poly_modulus_degree, 20));
+  parms.set_plain_modulus(65537);
 
   parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
 
@@ -65,7 +65,9 @@ int main() {
   auto finish = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - start)
                     .count();
-  cout << "encode                                : " << finish << " us" << endl;
+  cout << "batch size                            : " << encrypted_op.size()
+       << endl;
+  cout << "batch                                 : " << finish << " us" << endl;
 
   start = std::chrono::high_resolution_clock::now();
   encryptor.encrypt(pt, ct);
@@ -90,8 +92,6 @@ int main() {
        << " KB" << endl;
 
   batch_encoder.encode(plain_op, pt);
-  Plaintext pt_k;
-  batch_encoder.encode(k, pt_k);
 
   // ops
   Ciphertext ct_temp;
@@ -138,34 +138,5 @@ int main() {
                .count();
   cout << "rotate_rows                           : " << finish << " us" << endl;
 
-  // test multiplication depth
-  {
-    vector<uint64_t> x(slot_count, 1);
-    x[1] = 3;
-    vector<uint64_t> y = x;
-    Plaintext pt;
-    Ciphertext ct, ct_temp;
-    batch_encoder.encode(x, pt);
-    encryptor.encrypt(pt, ct);
-    encryptor.encrypt(pt, ct_temp);
-    Plaintext ans;
-    vector<uint64_t> res;
-    uint64_t depth = 0;
-    for (uint64_t i = 0; i < 20; i++) {
-      evaluator.multiply_inplace(ct, ct_temp);
-      evaluator.relinearize_inplace(ct, relin_keys);
-
-      for (uint64_t j = 0; j < slot_count; j++) {
-        x[j] = x[j] * y[j] % plain_modulus;
-      }
-      decryptor.decrypt(ct, ans);
-      batch_encoder.decode(ans, res);
-      if (res[0] != x[0] || res[1] != x[1]) {
-        depth = i;
-        break;
-      }
-    }
-    cout << "depth                                 : " << depth << endl;
-  }
   return 0;
 }
