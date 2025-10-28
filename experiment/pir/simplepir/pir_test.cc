@@ -24,7 +24,7 @@
 
 namespace pir::simple {
 constexpr size_t kTestDim = 1 << 10;
-constexpr size_t kTestSize = 1ULL << 12;
+constexpr size_t kTestSize = 1ULL << 24;
 constexpr uint64_t kTestModulus = 1ULL << 32;
 constexpr uint64_t kTestPlainModulus = 991;
 
@@ -36,6 +36,8 @@ inline void GenerateDatabase(std::vector<std::vector<uint64_t>> &database) {
     database[i] =
         pir::simple::GenerateRandomVector(col, kTestPlainModulus, true);
   }
+  SPDLOG_INFO("Database size is {} MB",
+              kTestSize * sizeof(uint64_t) / (1024 * 1024));
 }
 
 TEST(PIRTest, AllWorkflow) {
@@ -44,12 +46,18 @@ TEST(PIRTest, AllWorkflow) {
   pir::simple::SimplePirClient client(kTestDim, kTestModulus, kTestSize,
                                       kTestPlainModulus, 4, 6.8);
   std::vector<std::vector<uint64_t>> database;
+  auto start = std::chrono::high_resolution_clock::now();
   GenerateDatabase(database);
   // Phase 1: Sets LWE matrix for server and client
   server.SetDatabase(database);
   server.GenerateLweMatrix();
   uint128_t server_seed = server.GetSeed();
   auto server_hint_vec = server.GetHint();
+  auto end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> duration = end - start;
+  SPDLOG_INFO(
+      "setup time: {} ms",
+      std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
 
   // Phase 2: PIR setup
   // Sends LWE matrix for client
@@ -70,6 +78,7 @@ TEST(PIRTest, AllWorkflow) {
   client.Setup(client_seed, client_hint_vec);
 
   // Phase 3: PIR query
+  start = std::chrono::high_resolution_clock::now();
   const size_t kTestIndex = 10;
   auto client_query = client.Query(kTestIndex);
   std::vector<uint64_t> server_query_received;
@@ -78,14 +87,28 @@ TEST(PIRTest, AllWorkflow) {
   receiver = std::async([&] { RecvVector(server_query_received, lctxs[1]); });
   sender.get();
   receiver.get();
+  end = std::chrono::high_resolution_clock::now();
+  duration = end - start;
+  SPDLOG_INFO(
+      "client generate query time: {} ms",
+      std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
 
   // Phase 4: PIR answer
+  start = std::chrono::high_resolution_clock::now();
   auto server_answer = server.Answer(server_query_received);
   std::vector<uint64_t> client_answer_received;
 
   sender = std::async([&] { SendVector(server_answer, lctxs[0]); });
   receiver = std::async([&] { RecvVector(client_answer_received, lctxs[1]); });
   sender.get();
+  end = std::chrono::high_resolution_clock::now();
+  duration = end - start;
+  double server_answer_time =
+      std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+  SPDLOG_INFO("server answer time: {} ms", server_answer_time);
+  double throughput =
+      kTestSize * sizeof(uint64_t) / (1024 * 1024) / server_answer_time * 1000;
+  SPDLOG_INFO("throughput: {} MB/s", throughput);
   receiver.get();
 
   // Phase 5: Result verification
