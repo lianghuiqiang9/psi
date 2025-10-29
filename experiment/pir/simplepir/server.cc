@@ -69,8 +69,9 @@ std::vector<uint64_t> SimplePirServer::GetHint() const {
   const size_t row_num = static_cast<size_t>(sqrt(N_));
   std::vector<uint64_t> hint(row_num * dimension_);
 
-// Computes matrix product = db * A^T mod q
-// Stores as a vector
+  // Computes matrix product = db * A^T mod q
+  // Stores as a vector
+
 #pragma omp parallel for num_threads(16)
   for (size_t i = 0; i < row_num; i++) {
     for (size_t j = 0; j < dimension_; j++) {
@@ -86,8 +87,7 @@ std::vector<uint64_t> SimplePirServer::Answer(const std::vector<uint64_t> &qu) {
   const size_t row_num = static_cast<size_t>(sqrt(N_));
   std::vector<uint64_t> ans(row_num);
 
-// Computes matrix-vector product with query
-#pragma omp parallel for num_threads(4)
+  // Computes matrix-vector product with query
   for (size_t i = 0; i < row_num; i++) {
     ans[i] = InnerProductModq(database_[i], qu, q_);
   }
