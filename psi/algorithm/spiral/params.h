@@ -310,7 +310,15 @@ class Params {
 
   std::uint64_t CrtCompose(const std::vector<std::uint64_t>& a,
                            std::size_t idx) const;
+  uint64_t GetQPrime1() const { return 1 << 20; }
 
+  uint64_t GetQPrime2() const {
+    if (Q2Bits() == ModulusLog2()) {
+      return Modulus();
+    } else {
+      return kQ2Values[Q2Bits()];
+    }
+  }
   // other util methods
 
   [[nodiscard]] std::string ToString();
@@ -384,6 +392,10 @@ class Params {
   std::uint64_t Mod1InvMod0() const { return crt_params_.mod1_inv_mod0_; }
 
   ParamsId Id() const { return id_; }
+
+  size_t DbRowsPadded() const {
+    return 1 << (query_params_.db_dim1_ + poly_len_log2_);
+  }
 
  private:
   void ComputeId();

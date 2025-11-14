@@ -17,6 +17,86 @@ load("//bazel:psi.bzl", "psi_cc_library", "psi_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 psi_cc_library(
+    name = "client",
+    srcs = ["client.cc"],
+    hdrs = ["client.h"],
+    deps = [
+        ":util",
+        "//psi/algorithm/spiral:discrete_gaussian",
+        "//psi/algorithm/spiral:gadget",
+        "//psi/algorithm/spiral:poly_matrix",
+        "//psi/algorithm/spiral:poly_matrix_utils",
+        "//psi/algorithm/spiral:spiral_client",
+        "//psi/algorithm/spiral/arith:number_theory",
+        "@abseil-cpp//absl/types:span",
+        "@yacl//yacl/crypto/rand",
+    ],
+)
+
+psi_cc_library(
+    name = "ypir_client",
+    srcs = ["ypir_client.cc"],
+    hdrs = ["ypir_client.h"],
+    deps = [
+        ":util",
+        "//psi/algorithm/spiral:poly_matrix",
+        "//psi/algorithm/spiral:poly_matrix_utils",
+        "//psi/algorithm/spiral:spiral_client",
+    ],
+)
+
+psi_cc_library(
+    name = "ypir_server",
+    srcs = ["ypir_server.cc"],
+    hdrs = ["ypir_server.h"],
+    deps = [
+        ":util",
+        "//psi/algorithm/spiral:poly_matrix",
+        "//psi/algorithm/spiral:poly_matrix_utils",
+    ],
+)
+
+psi_cc_test(
+    name = "client_test",
+    srcs = ["client_test.cc"],
+    deps = [
+        ":client",
+        "@yacl//yacl/crypto/rand",
+        "@yacl//yacl/crypto/tools:prg",
+    ],
+)
+
+psi_cc_test(
+    name = "ypir_client_test",
+    srcs = ["ypir_client_test.cc"],
+    deps = [
+        ":util",
+        ":ypir_client",
+        "@yacl//yacl/crypto/rand",
+        "@yacl//yacl/crypto/tools:prg",
+    ],
+)
+
+psi_cc_test(
+    name = "ypir_server_test",
+    srcs = ["ypir_server_test.cc"],
+    deps = [
+        ":util",
+        ":ypir_server",
+        "@yacl//yacl/crypto/rand",
+        "@yacl//yacl/crypto/tools:prg",
+    ],
+)
+
+psi_cc_library(
+    name = "params",
+    srcs = ["params.cc"],
+    hdrs = ["params.h"],
+    deps = [
+    ],
+)
+
+psi_cc_library(
     name = "util",
     srcs = ["util.cc"],
     hdrs = ["util.h"],

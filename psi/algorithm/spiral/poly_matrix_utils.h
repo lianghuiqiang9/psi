@@ -45,7 +45,7 @@ void AddPoly(const Params& params, absl::Span<uint64_t> res,
 void AddPolyInto(const Params& params, absl::Span<const uint64_t> res,
                  absl::Span<const uint64_t> a);
 // res = -a
-void InvertPoly(const Params& params, absl::Span<uint64_t> res,
+void NegatePoly(const Params& params, absl::Span<uint64_t> res,
                 absl::Span<const uint64_t> a);
 
 void AutomotphPoly(const Params& params, absl::Span<uint64_t> res,
@@ -98,8 +98,8 @@ void AddInto(const Params& params, PolyMatrixNtt& res, const PolyMatrixNtt& a);
 void AddIntoAt(const Params& params, PolyMatrixNtt& res, const PolyMatrixNtt& a,
                size_t t_row, size_t t_col);
 
-void Invert(const Params& params, PolyMatrixRaw& res, const PolyMatrixRaw& a);
-PolyMatrixRaw Invert(const Params& params, const PolyMatrixRaw& a);
+void Negate(const Params& params, PolyMatrixRaw& res, const PolyMatrixRaw& a);
+PolyMatrixRaw Negate(const Params& params, const PolyMatrixRaw& a);
 
 void FromNtt(const Params& params, PolyMatrixRaw& out, const PolyMatrixNtt& in);
 PolyMatrixRaw FromNtt(const Params& params, const PolyMatrixNtt& in);

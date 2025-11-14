@@ -121,7 +121,7 @@ void AddPolyInto(const Params& params, absl::Span<uint64_t> res,
   }
 }
 
-void InvertPoly(const Params& params, absl::Span<uint64_t> res,
+void NegatePoly(const Params& params, absl::Span<uint64_t> res,
                 absl::Span<const uint64_t> a) {
   for (size_t i = 0; i < params.PolyLen(); ++i) {
     res[i] = params.Modulus() - a[i];
@@ -320,7 +320,7 @@ void AddIntoAt(const Params& params, PolyMatrixNtt& res, const PolyMatrixNtt& a,
   }
 }
 
-void Invert(const Params& params, PolyMatrixRaw& res, const PolyMatrixRaw& a) {
+void Negate(const Params& params, PolyMatrixRaw& res, const PolyMatrixRaw& a) {
   WEAK_ENFORCE(res.Rows() == a.Rows());
   WEAK_ENFORCE(res.Cols() == a.Cols());
 
@@ -328,18 +328,18 @@ void Invert(const Params& params, PolyMatrixRaw& res, const PolyMatrixRaw& a) {
     for (size_t j = 0; j < a.Cols(); ++j) {
       auto res_poly = res.Poly(i, j);
       auto a_poly = a.Poly(i, j);
-      InvertPoly(params, res_poly, a_poly);
+      NegatePoly(params, res_poly, a_poly);
     }
   }
 }
 
-PolyMatrixRaw Invert(const Params& params, const PolyMatrixRaw& a) {
+PolyMatrixRaw Negate(const Params& params, const PolyMatrixRaw& a) {
   PolyMatrixRaw res(params.PolyLen(), a.Rows(), a.Cols());
   for (size_t i = 0; i < a.Rows(); ++i) {
     for (size_t j = 0; j < a.Cols(); ++j) {
       auto res_poly = res.Poly(i, j);
       auto a_poly = a.Poly(i, j);
-      InvertPoly(params, res_poly, a_poly);
+      NegatePoly(params, res_poly, a_poly);
     }
   }
   return res;

@@ -170,6 +170,8 @@ class PolyMatrixRaw {
 
   static PolyMatrixRaw RandomPrg(const Params& params, size_t rows, size_t cols,
                                  yacl::crypto::Prg<uint64_t>& prg);
+  static PolyMatrixRaw Recover(const Params& params, uint64_t q_1, uint64_t q_2,
+                               const std::vector<uint8_t>& ciphertext);
 
  private:
   size_t poly_len_ = 0;

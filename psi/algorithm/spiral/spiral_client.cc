@@ -20,6 +20,7 @@
 #include "yacl/utils/parallel.h"
 
 #include "psi/algorithm/pir_interface/pir_db.h"
+#include "psi/algorithm/spiral/arith/arith.h"
 #include "psi/algorithm/spiral/arith/ntt.h"
 #include "psi/algorithm/spiral/common.h"
 #include "psi/algorithm/spiral/gadget.h"
@@ -156,6 +157,32 @@ PolyMatrixNtt SpiralClient::GetRegevSample(
   return p;
 }
 
+PolyMatrixNtt SpiralClient::GetScaledRegevSample(
+    yacl::crypto::Prg<uint64_t>& rng,
+    yacl::crypto::Prg<uint64_t>& rng_pub,
+    uint64_t scale) const {
+
+    auto a = PolyMatrixRaw::RandomPrg(params_, 1, 1, rng_pub);
+    auto a_ntt = ToNtt(params_, a);
+    auto a_inv = ToNtt(params_, Invert(params_, a));
+    auto e = Noise(params_, 1, 1, dg_, rng);
+
+    for (size_t i = 0; i < params_.PolyLen(); ++i) {
+        e.Data()[i] = arith::MultiplyUintMod(e.Data()[i], scale, params_.Modulus());
+    }
+
+    auto e_ntt = ToNtt(params_, e);
+    auto sk_reg_ntt = ToNtt(params_, sk_reg_);
+    auto b_p = Multiply(params_, sk_reg_ntt, a_ntt);
+    auto b = Add(params_, e_ntt, b_p);
+
+    auto p = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(), 2, 1);
+    p.CopyInto(a_inv, 0, 0); 
+    p.CopyInto(b, 1, 0);
+
+    return p;
+}
+
 PolyMatrixNtt SpiralClient::GetFreshRegevPublicKey(
     size_t m, yacl::crypto::Prg<uint64_t>& rng,
     yacl::crypto::Prg<uint64_t>& rng_pub) const {
@@ -164,6 +191,18 @@ PolyMatrixNtt SpiralClient::GetFreshRegevPublicKey(
     p.CopyInto(GetRegevSample(rng, rng_pub), 0, i);
   }
   return p;
+}
+
+
+PolyMatrixNtt SpiralClient::GetFreshScaledRegevPublicKey(
+    size_t m, yacl::crypto::Prg<uint64_t>& rng,
+    yacl::crypto::Prg<uint64_t>& rng_pub,
+    uint64_t scale) const {
+    auto p = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(), 2, m);
+    for (size_t i = 0; i < m; ++i) {
+        p.CopyInto(GetScaledRegevSample(rng, rng_pub, scale), 0, i);
+    }
+    return p;
 }
 
 PolyMatrixNtt SpiralClient::EncryptMatrixGsw(
@@ -184,6 +223,16 @@ PolyMatrixNtt SpiralClient::EncryptMatrixRegev(
   YACL_ENFORCE(sk_inited_, "Secret Key must be inited");
   auto m = a.Cols();
   auto p = GetFreshRegevPublicKey(m, rng, rng_pub);
+  return Add(params_, p, a.PadTop(1));
+}
+
+
+PolyMatrixNtt SpiralClient::EncryptMatrixScaledRegev(
+    PolyMatrixNtt& a, yacl::crypto::Prg<uint64_t>& rng,
+    yacl::crypto::Prg<uint64_t>& rng_pub, uint64_t scale) const {
+  YACL_ENFORCE(sk_inited_, "Secret Key must be inited");
+  auto m = a.Cols();
+  auto p = GetFreshScaledRegevPublicKey(m, rng, rng_pub, scale);
   return Add(params_, p, a.PadTop(1));
 }
 
