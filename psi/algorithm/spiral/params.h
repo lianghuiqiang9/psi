@@ -397,6 +397,8 @@ class Params {
     return 1 << (query_params_.db_dim1_ + poly_len_log2_);
   }
 
+  size_t Rho() const;
+
  private:
   void ComputeId();
   void SetDbDim1(size_t v1) { query_params_.db_dim1_ = v1; }

@@ -24,6 +24,15 @@ struct LWEParams {
 
   uint64_t ScaleK() const { return modulus / pt_modulus; }
   static LWEParams Default() { return LWEParams(); }
+  uint64_t GetQPrime2() const {
+    const size_t modulus_bits =
+        static_cast<size_t>(std::ceil(std::log2(static_cast<double>(modulus))));
+    if (q2_bits == modulus_bits) {
+      return modulus;
+    } else {
+      return kQ2Values[q2_bits];
+    }
+  }
 };
 
 class LWEClient {
@@ -58,10 +67,10 @@ struct YPIRSimpleQuery {
 class YClient {
  private:
   LWEClient lwe_client_;
-  SpiralClient* spiral_client_;
-  const Params* params_;
+  SpiralClient spiral_client_;
+  const Params params_;
 
-  std::vector<uint64_t> rlwes_to_lwes(
+  std::vector<uint64_t> RlwesToLwes(
       const std::vector<spiral::PolyMatrixRaw>& ct) const;
   std::vector<spiral::PolyMatrixRaw> GenerateQueryImpl(uint128_t seed,
                                                        size_t dim_log2,
@@ -71,8 +80,12 @@ class YClient {
                                                bool packing, size_t index_row);
 
  public:
-  YClient(SpiralClient* client, const Params* params);
-  YClient(SpiralClient* client, const Params* params, const uint128_t seed);
+  YClient(const SpiralClient& client, const Params& params);
+  YClient(const SpiralClient& client, const Params& params,
+          const uint128_t seed);
+
+  const SpiralClient& GetSpiralClient() const { return spiral_client_; }
+  const LWEClient& GetLweClient() const { return lwe_client_; }
 
   std::vector<uint64_t> GenerateQuery(bool is_query_row, size_t dim_log2,
                                       bool packing, size_t index_row);
@@ -80,28 +93,24 @@ class YClient {
   YPIRQuery GenerateFullQuery(size_t target_idx);
   YPIRSimpleQuery GenerateFullQuerySimplepir(uint64_t target_idx);
 
-  static PolyMatrixRaw DecryptCtRegMeasured(const SpiralClient* client,
-                                            const Params* params,
+  static PolyMatrixRaw DecryptCtRegMeasured(const SpiralClient& client,
+                                            const Params& params,
                                             const PolyMatrixNtt& ct,
                                             size_t coeffs_to_measure);
 };
 
 class YPIRClient {
  private:
-  const Params* params_;
+  const Params params_;
 
  public:
-  YPIRClient(const Params* params);
+  YPIRClient(const Params& params);
 
-  static std::array<uint8_t, 20> hash(const std::string& target_item);
-  static size_t bucket(size_t log2_num_items, const std::string& target_item);
-  // static std::unique_ptr<YPIRClient> from_db_sz(
-  //     uint64_t num_items,
-  //     uint64_t item_size_bits,
-  //     bool is_simplepir
-  // );
-  std::pair<YPIRQuery, uint128_t> generate_query_normal(size_t target_idx);
-  std::pair<YPIRSimpleQuery, uint128_t> generate_query_simplepir(
+  static std::array<uint8_t, 20> Hash(const std::string& target_item);
+  static size_t Bucket(size_t log2_num_items, const std::string& target_item);
+
+  std::pair<YPIRQuery, uint128_t> GenerateQueryNormal(size_t target_idx);
+  std::pair<YPIRSimpleQuery, uint128_t> GenerateQuerySimplepir(
       size_t target_row);
 
   uint64_t DecodeResponseNormal(const uint128_t client_seed,
@@ -109,6 +118,9 @@ class YPIRClient {
   std::vector<uint8_t> DecodeResponseSimplepir(
       const uint128_t client_seed, const std::vector<uint8_t>& response_data);
   uint64_t DecodeResponseNormalYClient(
+      const Params& params, const YClient& y_client,
+      const std::vector<uint8_t>& response_data);
+  std::vector<uint64_t> DecodeResponseSimplepirYClient(
       const Params& params, const YClient& y_client,
       const std::vector<uint8_t>& response_data);
 };

@@ -21,12 +21,12 @@ namespace psi::ypir {
 using namespace psi::spiral;
 
 // from params.rs
-size_t log2_ceil(uint64_t value) {
+size_t Log2Ceil(uint64_t value) {
   if (value == 0) return 0;
   return static_cast<size_t>(std::ceil(std::log2(value)));
 }
 
-size_t next_power_of_two(size_t value) {
+size_t NextPowerOfTwo(size_t value) {
   if (value == 0) return 1;
   size_t power = 1;
   while (power < value) {
@@ -35,7 +35,7 @@ size_t next_power_of_two(size_t value) {
   return power;
 }
 
-size_t trailing_zeros(size_t value) {
+size_t TrailingZeros(size_t value) {
   if (value == 0) return 0;
   size_t count = 0;
   while ((value & 1) == 0) {
@@ -46,8 +46,8 @@ size_t trailing_zeros(size_t value) {
 }
 
 // from convolution.rs
-std::vector<uint32_t> negacyclic_matrix_u32(const std::vector<uint32_t>& a,
-                                            size_t n, uint64_t modulus) {
+std::vector<uint32_t> NegacyclicMatrixU32(const std::vector<uint32_t>& a,
+                                          size_t n, uint64_t modulus) {
   std::vector<uint32_t> out(n * n);
   std::vector<uint32_t> current_row(a.begin(), a.begin() + n);
   for (size_t i = 0; i < n; ++i) {
@@ -65,8 +65,8 @@ std::vector<uint32_t> negacyclic_matrix_u32(const std::vector<uint32_t>& a,
 }
 
 // from bits.rs
-std::vector<uint8_t> u64s_to_contiguous_bytes(const std::vector<uint64_t>& data,
-                                              size_t bits_per_u64) {
+std::vector<uint8_t> U64sToContiguousBytes(const std::vector<uint64_t>& data,
+                                           size_t bits_per_u64) {
   size_t total_bits = data.size() * bits_per_u64;
   size_t num_bytes = (total_bits + 7) / 8;
   std::vector<uint8_t> out(num_bytes, 0);
@@ -221,14 +221,14 @@ std::vector<uint64_t> PackQuery(const Params& params,
   return packed_query;
 }
 
-double MeasureNoiseWidthSquared(const SpiralClient* client,
-                                const Params* params, const PolyMatrixNtt& ct,
+double MeasureNoiseWidthSquared(const SpiralClient& client,
+                                const Params& params, const PolyMatrixNtt& ct,
                                 const PolyMatrixRaw& pt,
                                 size_t coeffs_to_measure) {
   const double PI = 3.14159265358979323846;
-  const int64_t m_i64 = static_cast<int64_t>(params->Modulus());
+  const int64_t m_i64 = static_cast<int64_t>(params.Modulus());
 
-  PolyMatrixRaw dec_result = FromNtt(*params, client->DecryptMatrixRegev(ct));
+  PolyMatrixRaw dec_result = FromNtt(params, client.DecryptMatrixRegev(ct));
   const auto& dec_data = dec_result.Data();
   const auto& pt_data = pt.Data();
 
@@ -240,7 +240,7 @@ double MeasureNoiseWidthSquared(const SpiralClient* client,
     const int64_t decrypted_val = static_cast<int64_t>(dec_data[i]);
 
     const int64_t true_val = static_cast<int64_t>(
-        arith::Rescale(pt_data[i], params->PtModulus(), params->Modulus()));
+        arith::Rescale(pt_data[i], params.PtModulus(), params.Modulus()));
     const int64_t diff = decrypted_val - true_val;
 
     int64_t diff_centered = diff % m_i64;
@@ -252,8 +252,7 @@ double MeasureNoiseWidthSquared(const SpiralClient* client,
     double noise_2 = std::pow(static_cast<double>(diff_centered), 2);
     total_squared_noise += noise_2;
   }
-  double variance =
-      total_squared_noise / static_cast<double>(params->PolyLen());
+  double variance = total_squared_noise / static_cast<double>(params.PolyLen());
 
   assert(variance >= 0.0);
   double subg_width_2 = variance * 2.0 * PI;
@@ -261,17 +260,17 @@ double MeasureNoiseWidthSquared(const SpiralClient* client,
   return subg_width_2;
 }
 
-PolyMatrixRaw DecryptCtRegMeasured(const SpiralClient* client,
-                                   const Params* params,
+PolyMatrixRaw DecryptCtRegMeasured(const SpiralClient& client,
+                                   const Params& params,
                                    const PolyMatrixNtt& ct,
                                    size_t coeffs_to_measure) {
-  PolyMatrixRaw dec_result = FromNtt(*params, client->DecryptMatrixRegev(ct));
+  PolyMatrixRaw dec_result = FromNtt(params, client.DecryptMatrixRegev(ct));
   PolyMatrixRaw dec_rescaled = PolyMatrixRaw::Zero(
-      params->PolyLen(), dec_result.Rows(), dec_result.Cols());
+      params.PolyLen(), dec_result.Rows(), dec_result.Cols());
 
   for (size_t i = 0; i < dec_rescaled.Data().size(); ++i) {
     dec_rescaled.Data()[i] = arith::Rescale(
-        dec_result.Data()[i], params->Modulus(), params->PtModulus());
+        dec_result.Data()[i], params.Modulus(), params.PtModulus());
   }
 
   // measure noise width
@@ -342,8 +341,7 @@ std::vector<uint32_t> LWEClient::EncryptMany(yacl::crypto::Prg<uint64_t>& rng,
     a.push_back(static_cast<uint32_t>(rng()));
   }
 
-  std::vector<uint32_t> nega_a =
-      negacyclic_matrix_u32(a, n, lwe_params_.modulus);
+  std::vector<uint32_t> nega_a = NegacyclicMatrixU32(a, n, lwe_params_.modulus);
   std::vector<uint32_t> last_row(n);
   for (size_t col = 0; col < n; ++col) {
     uint32_t sum = 0;
@@ -379,24 +377,24 @@ uint32_t LWEClient::Decrypt(const std::vector<uint32_t>& ct) const {
 // YClient Implementation
 // ===================================================================================
 
-YClient::YClient(SpiralClient* client, const Params* params)
+YClient::YClient(const SpiralClient& client, const Params& params)
     : lwe_client_(LWEClient::FromSeed(LWEParams::Default(),
                                       yacl::crypto::SecureRandU128())),
       spiral_client_(client),
       params_(params) {}
 
-YClient::YClient(SpiralClient* client, const Params* params,
+YClient::YClient(const SpiralClient& client, const Params& params,
                  const uint128_t seed)
     : lwe_client_(LWEClient::FromSeed(LWEParams::Default(), seed)),
       spiral_client_(client),
       params_(params) {}
 
-std::vector<uint64_t> YClient::rlwes_to_lwes(
+std::vector<uint64_t> YClient::RlwesToLwes(
     const std::vector<PolyMatrixRaw>& cts) const {
   if (cts.empty()) {
     return {};
   }
-  size_t n = params_->PolyLen();
+  size_t n = params_.PolyLen();
   size_t num_cts = cts.size();
   std::vector<uint64_t> lwes((n + 1) * n * num_cts);
 
@@ -407,7 +405,7 @@ std::vector<uint64_t> YClient::rlwes_to_lwes(
 
     std::vector<uint32_t> a_poly_vec(a_poly.begin(), a_poly.end());
     auto negacylic_a_u32 =
-        negacyclic_matrix_u32(a_poly_vec, n, params_->Modulus());
+        NegacyclicMatrixU32(a_poly_vec, n, params_.Modulus());
 
     for (size_t r = 0; r < n; ++r) {
       for (size_t c = 0; c < n; ++c) {
@@ -431,37 +429,37 @@ std::vector<PolyMatrixRaw> YClient::GenerateQueryImpl(uint128_t seed,
   std::vector<PolyMatrixRaw> out;
   const size_t num_iterations = (1ULL << dim_log2);
   out.reserve(num_iterations);
-  const uint64_t scale_k = params_->ScaleK();
+  const uint64_t scale_k = params_.ScaleK();
 
   for (size_t i = 0; i < num_iterations; ++i) {
-    PolyMatrixRaw scalar = PolyMatrixRaw::Zero(params_->PolyLen(), 1, 1);
-    const bool is_nonzero = (i == (index / params_->PolyLen()));
+    PolyMatrixRaw scalar = PolyMatrixRaw::Zero(params_.PolyLen(), 1, 1);
+    const bool is_nonzero = (i == (index / params_.PolyLen()));
     if (is_nonzero) {
-      scalar.Poly(0, 0)[index % params_->PolyLen()] = scale_k;
+      scalar.Poly(0, 0)[index % params_.PolyLen()] = scale_k;
     }
 
     const uint64_t factor =
-        arith::InvertUintMod(params_->PolyLen(), params_->Modulus());
+        arith::InvertUintMod(params_.PolyLen(), params_.Modulus());
 
     if (packing) {
-      auto factor_pm = PolyMatrixRaw::SingleValue(params_->PolyLen(), factor);
-      auto factor_pm_ntt = ToNtt(*params_, factor_pm);
-      auto scalar_ntt = ToNtt(*params_, scalar);
-      auto multiplied_ntt = ScalarMultiply(*params_, factor_pm_ntt, scalar_ntt);
-      scalar = FromNtt(*params_, multiplied_ntt);
+      auto factor_pm = PolyMatrixRaw::SingleValue(params_.PolyLen(), factor);
+      auto factor_pm_ntt = ToNtt(params_, factor_pm);
+      auto scalar_ntt = ToNtt(params_, scalar);
+      auto multiplied_ntt = ScalarMultiply(params_, factor_pm_ntt, scalar_ntt);
+      scalar = FromNtt(params_, multiplied_ntt);
     }
     PolyMatrixNtt ct;
     yacl::crypto::Prg<uint64_t> rng_noise(yacl::crypto::SecureRandU128());
 
-    auto scalar_ntt = ToNtt(*params_, scalar);
+    auto scalar_ntt = ToNtt(params_, scalar);
 
     if (multiply_ct) {
-      ct = spiral_client_->EncryptMatrixScaledRegev(scalar_ntt, rng_noise,
-                                                    rng_pub, factor);
+      ct = spiral_client_.EncryptMatrixScaledRegev(scalar_ntt, rng_noise,
+                                                   rng_pub, factor);
     } else {
-      ct = spiral_client_->EncryptMatrixRegev(scalar_ntt, rng_noise, rng_pub);
+      ct = spiral_client_.EncryptMatrixRegev(scalar_ntt, rng_noise, rng_pub);
     }
-    PolyMatrixRaw ct_raw = FromNtt(*params_, ct);
+    PolyMatrixRaw ct_raw = FromNtt(params_, ct);
     out.push_back(std::move(ct_raw));
   }
   return out;
@@ -473,7 +471,7 @@ std::vector<uint64_t> YClient::GenerateQuery(bool is_query_row, size_t dim_log2,
   if (is_query_row && !packing) {
     // fast path
     LWEParams lwe_params = LWEParams::Default();
-    const size_t dim = 1ULL << (dim_log2 + params_->PolyLenLog2());
+    const size_t dim = 1ULL << (dim_log2 + params_.PolyLenLog2());
     std::vector<uint64_t> lwes((lwe_params.n + 1) * dim, 0);
 
     const uint32_t scale_k = static_cast<uint32_t>(lwe_params.ScaleK());
@@ -501,7 +499,7 @@ std::vector<uint64_t> YClient::GenerateQuery(bool is_query_row, size_t dim_log2,
     return lwes;
   } else {
     auto out = GenerateQueryImpl(seed, dim_log2, packing, index_row);
-    auto lwes = rlwes_to_lwes(out);
+    auto lwes = RlwesToLwes(out);
 
     return lwes;
   }
@@ -518,37 +516,37 @@ std::vector<uint64_t> YClient::GenerateQueryLweLowMem(uint128_t seed,
   std::vector<uint64_t> out;
 
   const size_t num_iterations = (1ULL << dim_log2);
-  out.reserve(num_iterations * params_->PolyLen());
-  const uint64_t scale_k = params_->ScaleK();
+  out.reserve(num_iterations * params_.PolyLen());
+  const uint64_t scale_k = params_.ScaleK();
 
   for (size_t i = 0; i < num_iterations; ++i) {
-    PolyMatrixRaw scalar = PolyMatrixRaw::Zero(params_->PolyLen(), 1, 1);
-    const bool is_nonzero = (i == (index / params_->PolyLen()));
+    PolyMatrixRaw scalar = PolyMatrixRaw::Zero(params_.PolyLen(), 1, 1);
+    const bool is_nonzero = (i == (index / params_.PolyLen()));
     if (is_nonzero) {
-      scalar.Data()[index % params_->PolyLen()] = scale_k;
+      scalar.Data()[index % params_.PolyLen()] = scale_k;
     }
     if (packing) {
       const uint64_t factor =
-          arith::InvertUintMod(params_->PolyLen(), params_->Modulus());
-      PolyMatrixNtt factor_pm_ntt = ToNtt(
-          *params_, PolyMatrixRaw::SingleValue(params_->PolyLen(), factor));
-      scalar = FromNtt(*params_, ScalarMultiply(*params_, factor_pm_ntt,
-                                                ToNtt(*params_, scalar)));
+          arith::InvertUintMod(params_.PolyLen(), params_.Modulus());
+      PolyMatrixNtt factor_pm_ntt =
+          ToNtt(params_, PolyMatrixRaw::SingleValue(params_.PolyLen(), factor));
+      scalar = FromNtt(params_, ScalarMultiply(params_, factor_pm_ntt,
+                                               ToNtt(params_, scalar)));
     }
 
     PolyMatrixNtt ct;
     yacl::crypto::Prg<uint64_t> rng_noise(yacl::crypto::SecureRandU128());
-    PolyMatrixNtt scalar_ntt = ToNtt(*params_, scalar);
+    PolyMatrixNtt scalar_ntt = ToNtt(params_, scalar);
     if (multiply_ct) {
       const uint64_t factor =
-          arith::InvertUintMod(params_->PolyLen(), params_->Modulus());
-      ct = spiral_client_->EncryptMatrixScaledRegev(scalar_ntt, rng_noise,
-                                                    rng_pub, factor);
+          arith::InvertUintMod(params_.PolyLen(), params_.Modulus());
+      ct = spiral_client_.EncryptMatrixScaledRegev(scalar_ntt, rng_noise,
+                                                   rng_pub, factor);
     } else {
-      ct = spiral_client_->EncryptMatrixRegev(scalar_ntt, rng_noise, rng_pub);
+      ct = spiral_client_.EncryptMatrixRegev(scalar_ntt, rng_noise, rng_pub);
     }
 
-    PolyMatrixRaw ct_raw = FromNtt(*params_, ct);
+    PolyMatrixRaw ct_raw = FromNtt(params_, ct);
     const auto& lwe_last_row = ct_raw.Poly(1, 0);
     out.insert(out.end(), lwe_last_row.begin(), lwe_last_row.end());
   }
@@ -556,37 +554,37 @@ std::vector<uint64_t> YClient::GenerateQueryLweLowMem(uint128_t seed,
 }
 
 YPIRQuery YClient::GenerateFullQuery(size_t target_idx) {
-  const size_t db_rows = 1ULL << (params_->DbDim1() + params_->PolyLenLog2());
-  const size_t db_cols = 1ULL << (params_->DbDim2() + params_->PolyLenLog2());
+  const size_t db_rows = 1ULL << (params_.DbDim1() + params_.PolyLenLog2());
+  const size_t db_cols = 1ULL << (params_.DbDim2() + params_.PolyLenLog2());
   const size_t target_row = target_idx / db_cols;
   const size_t target_col = target_idx % db_cols;
 
-  auto sk_reg = spiral_client_->GetSkRegev();
+  auto sk_reg = spiral_client_.GetSkRegev();
   yacl::crypto::Prg<uint64_t> rng_noise(yacl::crypto::SecureRandU128());
   yacl::crypto::Prg<uint64_t> rng_pub_static(yacl::crypto::SecureRandU128());
 
-  auto pack_pub_params = RawGenerateExpansionParams(
-      *params_, sk_reg, params_->PolyLenLog2(), params_->TExpLeft(), rng_noise,
-      rng_pub_static);
+  auto pack_pub_params =
+      RawGenerateExpansionParams(params_, sk_reg, params_.PolyLenLog2(),
+                                 params_.TExpLeft(), rng_noise, rng_pub_static);
 
   auto pack_pub_params_row_1s = pack_pub_params;
   for (size_t i = 0; i < pack_pub_params.size(); ++i) {
     auto submatrix =
         pack_pub_params[i].SubMatrix(1, 0, 1, pack_pub_params[i].Cols());
-    pack_pub_params_row_1s[i] = CondenseMatrix(*params_, submatrix);
+    pack_pub_params_row_1s[i] = CondenseMatrix(params_, submatrix);
   }
 
   std::vector<uint64_t> pack_pub_params_row_1s_pm =
-      PackVecPm(*params_, 1, params_->TExpLeft(), pack_pub_params_row_1s);
+      PackVecPm(params_, 1, params_.TExpLeft(), pack_pub_params_row_1s);
 
   assert(pack_pub_params_row_1s_pm.size() * sizeof(uint64_t) ==
-         static_cast<size_t>(params_->PolyLenLog2()) * params_->TExpLeft() *
-             params_->PolyLen() * sizeof(uint64_t));
+         static_cast<size_t>(params_.PolyLenLog2()) * params_.TExpLeft() *
+             params_.PolyLen() * sizeof(uint64_t));
 
   // generate query
   bool is_query_row = true;
   auto query_row =
-      GenerateQuery(is_query_row, params_->DbDim1(), false, target_row);
+      GenerateQuery(is_query_row, params_.DbDim1(), false, target_row);
 
   // 提取最后一行
   const size_t query_row_start_idx = lwe_client_.LweParams().n * db_rows;
@@ -600,38 +598,37 @@ YPIRQuery YClient::GenerateFullQuery(size_t target_idx) {
   std::transform(packed_query_row.begin(), packed_query_row.end(),
                  std::back_inserter(packed_query_row_u32),
                  [](uint64_t val) { return static_cast<uint32_t>(val); });
-  packed_query_row_u32.resize(params_->DbRowsPadded(), 0);
-  assert(packed_query_row_u32.size() == params_->DbRowsPadded());
+  packed_query_row_u32.resize(params_.DbRowsPadded(), 0);
+  assert(packed_query_row_u32.size() == params_.DbRowsPadded());
 
   is_query_row = false;
-  auto query_col_vec =
-      GenerateQuery(false, params_->DbDim2(), true, target_col);
-  const size_t query_col_start_idx = params_->PolyLen() * db_cols;
+  auto query_col_vec = GenerateQuery(false, params_.DbDim2(), true, target_col);
+  const size_t query_col_start_idx = params_.PolyLen() * db_cols;
   std::vector<uint64_t> query_col_last_row(
       query_col_vec.begin() + query_col_start_idx, query_col_vec.end());
 
-  auto packed_query_col = PackQuery(*params_, query_col_last_row);
+  auto packed_query_col = PackQuery(params_, query_col_last_row);
   assert(packed_query_col.size() == db_cols);
 
   return {packed_query_row_u32, packed_query_col, pack_pub_params_row_1s_pm};
 }
 
 YPIRSimpleQuery YClient::GenerateFullQuerySimplepir(uint64_t target_idx) {
-  size_t db_rows = 1 << params_->DbDim1();
-  size_t db_cols = 1 << params_->DbDim2();
+  size_t db_rows = 1 << params_.DbDim1();
+  size_t db_cols = 1 << params_.DbDim2();
   size_t target_row = static_cast<size_t>(target_idx / db_cols);
 
   std::vector<uint64_t> pack_pub_params_row_1s_pm(
-      params_->PolyLenLog2() * params_->TExpLeft() * params_->PolyLen());
+      params_.PolyLenLog2() * params_.TExpLeft() * params_.PolyLen());
 
   bool is_query_row = true;
   auto query_row_last_row =
-      GenerateQueryLweLowMem(is_query_row, params_->DbDim1(), true, target_row);
+      GenerateQueryLweLowMem(is_query_row, params_.DbDim1(), true, target_row);
 
   std::vector<uint64_t> packed_query_row(db_rows);
   for (size_t i = 0; i < std::min(db_rows, query_row_last_row.size()); ++i) {
-    uint64_t crt0 = query_row_last_row[i] % params_->Moduli(0);
-    uint64_t crt1 = query_row_last_row[i] % params_->Moduli(1);
+    uint64_t crt0 = query_row_last_row[i] % params_.Moduli(0);
+    uint64_t crt1 = query_row_last_row[i] % params_.Moduli(1);
     packed_query_row[i] = crt0 | (crt1 << 32);
   }
 
@@ -642,9 +639,9 @@ YPIRSimpleQuery YClient::GenerateFullQuerySimplepir(uint64_t target_idx) {
 // YPIRClient Implementation
 // ===================================================================================
 
-YPIRClient::YPIRClient(const Params* params) : params_(params) {}
+YPIRClient::YPIRClient(const Params& params) : params_(params) {}
 
-std::array<uint8_t, 20> YPIRClient::hash(const std::string& target_item) {
+std::array<uint8_t, 20> YPIRClient::Hash(const std::string& target_item) {
   std::array<uint8_t, 20> hash_result = {0};
   for (size_t i = 0; i < std::min(target_item.size(), size_t(20)); ++i) {
     hash_result[i] = static_cast<uint8_t>(target_item[i]);
@@ -652,9 +649,9 @@ std::array<uint8_t, 20> YPIRClient::hash(const std::string& target_item) {
   return hash_result;
 }
 
-size_t YPIRClient::bucket(size_t log2_num_items,
+size_t YPIRClient::Bucket(size_t log2_num_items,
                           const std::string& target_item) {
-  auto item_hash = hash(target_item);
+  auto item_hash = Hash(target_item);
   uint32_t top_idx = (static_cast<uint32_t>(item_hash[0]) << 24) |
                      (static_cast<uint32_t>(item_hash[1]) << 16) |
                      (static_cast<uint32_t>(item_hash[2]) << 8) |
@@ -662,47 +659,33 @@ size_t YPIRClient::bucket(size_t log2_num_items,
   return top_idx >> (32 - log2_num_items);
 }
 
-// std::unique_ptr<YPIRClient> YPIRClient::from_db_sz(
-//     uint64_t num_items,
-//     uint64_t item_size_bits,
-//     bool is_simplepir
-// ) {
-//     std::unique_ptr<Params> params;
-//     if (is_simplepir) {
-//         params = params_for_scenario_simplepir(num_items, item_size_bits);
-//     } else {
-//         params = params_for_scenario(num_items, item_size_bits);
-//     }
-//     return std::make_unique<YPIRClient>(params.get());
-// }
-
-std::pair<YPIRQuery, uint128_t> YPIRClient::generate_query_normal(
+std::pair<YPIRQuery, uint128_t> YPIRClient::GenerateQueryNormal(
     size_t target_idx) {
   uint128_t client_seed = yacl::crypto::SecureRandU128();
-  auto client = SpiralClient(*params_);
-  YClient y_client(&client, params_, client_seed);
+  auto client = SpiralClient(params_);
+  YClient y_client(client, params_, client_seed);
   auto query = y_client.GenerateFullQuery(target_idx);
   return {query, client_seed};
 }
 
-std::pair<YPIRSimpleQuery, uint128_t> YPIRClient::generate_query_simplepir(
+std::pair<YPIRSimpleQuery, uint128_t> YPIRClient::GenerateQuerySimplepir(
     size_t target_row) {
   uint64_t target_idx = static_cast<uint64_t>(target_row);
   uint128_t client_seed = yacl::crypto::SecureRandU128();
-  auto client = SpiralClient(*params_);
-  YClient y_client(&client, params_, client_seed);
+  auto client = SpiralClient(params_);
+  YClient y_client(client, params_, client_seed);
   auto query = y_client.GenerateFullQuerySimplepir(target_idx);
   return {query, client_seed};
 }
 
 uint64_t YPIRClient::DecodeResponseNormal(
     const uint128_t seed, const std::vector<uint8_t>& response_data) {
-  auto client = SpiralClient(*params_, seed);
+  auto client = SpiralClient(params_, seed);
 
-  YClient y_client = YClient(&client, params_, seed);
+  YClient y_client = YClient(client, params_, seed);
 
-  uint64_t out = YPIRClient::DecodeResponseNormalYClient(*params_, y_client,
-                                                         response_data);
+  uint64_t out =
+      YPIRClient::DecodeResponseNormalYClient(params_, y_client, response_data);
 
   // return out
   return out;
@@ -710,15 +693,15 @@ uint64_t YPIRClient::DecodeResponseNormal(
 
 std::vector<uint8_t> YPIRClient::DecodeResponseSimplepir(
     const uint128_t seed, const std::vector<uint8_t>& response_data) {
-  auto client = SpiralClient(*params_, seed);
-  YClient y_client(&client, params_, seed);
+  auto client = SpiralClient(params_, seed);
+  YClient y_client(client, params_, seed);
   auto decoded =
-      YClient::decode_response_simplepir_yclient(y_client, response_data);
-  size_t pt_bits = static_cast<size_t>(std::log2(params_->PtModulus()));
-  return u64s_to_contiguous_bytes(decoded, pt_bits);
+      DecodeResponseSimplepirYClient(params_, y_client, response_data);
+  size_t pt_bits = static_cast<size_t>(std::log2(params_.PtModulus()));
+  return U64sToContiguousBytes(decoded, pt_bits);
 }
 
-uint64_t DecodeResponseNormalYClient(
+uint64_t YPIRClient::DecodeResponseNormalYClient(
     const Params& params, const YClient& y_client,
     const std::vector<uint8_t>& response_data) {
   const size_t num_rlwe_outputs = params.Rho();
@@ -740,26 +723,26 @@ uint64_t DecodeResponseNormalYClient(
 
   std::vector<uint64_t> outer_ct;
   for (const auto& ct : response) {
-    PolyMatrixRaw decrypted_part = DecryptCtRegMeasured(
-        y_client.client(), &params, ct.ntt(), params.poly_len);
-    const auto& decrypted_coeffs = decrypted_part.as_slice();
+    PolyMatrixRaw decrypted_part =
+        DecryptCtRegMeasured(y_client.GetSpiralClient(), params,
+                             ToNtt(params, ct), params.PolyLen());
+    const auto& decrypted_coeffs = decrypted_part.Data();
     outer_ct.insert(outer_ct.end(), decrypted_coeffs.begin(),
                     decrypted_coeffs.end());
   }
 
-  std::vector<uint8_t> outer_ct_t_u8 =
-      u64s_to_contiguous_bytes(outer_ct, pt_bits);
+  std::vector<uint8_t> outer_ct_t_u8 = U64sToContiguousBytes(outer_ct, pt_bits);
 
   PolyMatrixRaw inner_ct = PolyMatrixRaw::Zero(params.PolyLen(), 2, 1);
   size_t bit_offs = 0;
-  const uint64_t lwe_q_prime = lwe_params.get_q_prime_2();
+  const uint64_t lwe_q_prime = lwe_params.GetQPrime2();
   const size_t special_offs = static_cast<size_t>(std::ceil(
       (static_cast<double>(lwe_params.n) * lwe_q_prime_bits) / pt_bits));
 
   for (size_t z = 0; z < lwe_params.n; ++z) {
     uint64_t val = read_bits(outer_ct_t_u8, bit_offs, lwe_q_prime_bits);
     assert(val < lwe_q_prime && "val >= lwe_q_prime");
-    inner_ct.data[z] = arith::Rescale(val, lwe_q_prime, lwe_params.modulus);
+    inner_ct.Data()[z] = arith::Rescale(val, lwe_q_prime, lwe_params.modulus);
   }
 
   uint64_t val = 0;
@@ -769,21 +752,67 @@ uint64_t DecodeResponseNormalYClient(
   }
   assert(val < lwe_q_prime && "val >= lwe_q_prime");
   std::cout << "[DEBUG] got b_val of: " << val << std::endl;
-  inner_ct.data[lwe_params.n] = rescale(val, lwe_q_prime, lwe_params.modulus);
+  inner_ct.Data()[lwe_params.n] =
+      arith::Rescale(val, lwe_q_prime, lwe_params.modulus);
 
   std::cout << "[DEBUG] decrypting inner ct..." << std::endl;
 
   std::vector<uint32_t> inner_ct_as_u32;
   inner_ct_as_u32.reserve(lwe_params.n + 1);
   for (size_t i = 0; i < lwe_params.n + 1; ++i) {
-    inner_ct_as_u32.push_back(static_cast<uint32_t>(inner_ct.data[i]));
+    inner_ct_as_u32.push_back(static_cast<uint32_t>(inner_ct.Data()[i]));
   }
 
-  uint32_t decrypted = y_client.lwe_client().decrypt(inner_ct_as_u32);
-  uint64_t final_result = rescale(static_cast<uint64_t>(decrypted),
-                                  lwe_params.modulus, lwe_params.pt_modulus);
+  uint32_t decrypted = y_client.GetLweClient().Decrypt(inner_ct_as_u32);
+  uint64_t final_result =
+      arith::Rescale(static_cast<uint64_t>(decrypted), lwe_params.modulus,
+                     lwe_params.pt_modulus);
 
   return final_result;
+}
+
+std::vector<uint64_t> YPIRClient::DecodeResponseSimplepirYClient(
+    const Params& params, const YClient& y_client,
+    const std::vector<uint8_t>& response_data) {
+  const size_t db_cols = params.Instances() * params.PolyLen();
+  const size_t num_rlwe_outputs = db_cols / params.PolyLen();
+  assert(response_data.size() % num_rlwe_outputs == 0 &&
+         "Response data size is not a multiple of num_rlwe_outputs");
+  const size_t chunk_size = response_data.size() / num_rlwe_outputs;
+
+  const uint64_t rlwe_q_prime_1 = params.GetQPrime1();
+  const uint64_t rlwe_q_prime_2 = params.GetQPrime2();
+
+  std::vector<PolyMatrixRaw> response;
+  response.reserve(num_rlwe_outputs);
+
+  for (size_t i = 0; i < num_rlwe_outputs; ++i) {
+    std::vector<uint8_t> chunk(response_data.begin() + i * chunk_size,
+                               response_data.begin() + (i + 1) * chunk_size);
+    response.push_back(
+        PolyMatrixRaw::Recover(params, rlwe_q_prime_1, rlwe_q_prime_2, chunk));
+  }
+
+  // debug!("decrypting outer cts...");
+  std::cout << "[DEBUG] Decrypting outer ciphertexts..." << std::endl;
+
+  std::vector<uint64_t> outer_ct;
+  // 预分配内存
+  outer_ct.reserve(num_rlwe_outputs * params.PolyLen());
+
+  for (const auto& ct : response) {
+    PolyMatrixRaw decrypted_part =
+        DecryptCtRegMeasured(y_client.GetSpiralClient(), params,
+                             ToNtt(params, ct), params.PolyLen());
+    const auto& decrypted_coeffs = decrypted_part.Data();
+    outer_ct.insert(outer_ct.end(), decrypted_coeffs.begin(),
+                    decrypted_coeffs.end());
+  }
+
+  assert(outer_ct.size() == num_rlwe_outputs * params.PolyLen() &&
+         "Final decrypted vector size mismatch");
+
+  return outer_ct;
 }
 
 }  // namespace psi::ypir
