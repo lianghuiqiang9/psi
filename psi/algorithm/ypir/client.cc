@@ -15,10 +15,14 @@
 #include "psi/algorithm/spiral/poly_matrix.h"
 #include "psi/algorithm/spiral/poly_matrix_utils.h"
 #include "psi/algorithm/spiral/spiral_client.h"
+#include "psi/algorithm/ypir/util.h"
 
 namespace psi::ypir {
 
 using namespace psi::spiral;
+constexpr uint8_t SEED_0 = 0;
+constexpr uint8_t SEED_1 = 1;
+static constexpr uint128_t kStaticSeed2 = yacl::MakeUint128(0, 2);
 
 // from params.rs
 size_t Log2Ceil(uint64_t value) {
@@ -99,80 +103,6 @@ uint64_t read_bits(const std::vector<uint8_t>& buffer, size_t bit_offset,
     }
   }
   return result;
-}
-
-PolyMatrixNtt GetRegevSample(const Params& params, const PolyMatrixRaw& sk_reg,
-                             yacl::crypto::Prg<uint64_t>& rng,
-                             yacl::crypto::Prg<uint64_t>& rng_pub) {
-  auto a = PolyMatrixRaw::RandomPrg(params, 1, 1, rng_pub);
-  auto a_ntt = ToNtt(params, a);
-  auto a_inv = ToNtt(params, Invert(params, a));
-  DiscreteGaussian dg(params.NoiseWidth());
-  auto e = Noise(params, 1, 1, dg, rng);
-
-  auto e_ntt = ToNtt(params, e);
-  auto sk_reg_ntt = ToNtt(params, sk_reg);
-  auto b_p = Multiply(params, sk_reg_ntt, a_ntt);
-  auto b = Add(params, e_ntt, b_p);
-  auto p = PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(), 2, 1);
-  p.CopyInto(a_inv, 0, 0);
-  p.CopyInto(b, 1, 0);
-
-  return p;
-}
-
-PolyMatrixNtt GetFreshRegevPublicKey(const Params& params,
-                                     const PolyMatrixRaw& sk_reg, size_t m,
-                                     yacl::crypto::Prg<uint64_t>& rng,
-                                     yacl::crypto::Prg<uint64_t>& rng_pub) {
-  auto p = PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(), 2, m);
-  for (size_t i = 0; i < m; ++i) {
-    p.CopyInto(GetRegevSample(params, sk_reg, rng, rng_pub), 0, i);
-  }
-  return p;
-}
-
-std::vector<PolyMatrixNtt> RawGenerateExpansionParams(
-    const Params& params, const PolyMatrixRaw& sk_reg, size_t num_exp,
-    size_t m_exp, yacl::crypto::Prg<uint64_t>& rng,
-    yacl::crypto::Prg<uint64_t>& rng_pub) {
-  auto g_exp = util::BuildGadget(params, 1, m_exp);
-  auto g_exp_ntt = ToNtt(params, g_exp);
-
-  std::vector<PolyMatrixNtt> res;
-  res.reserve(num_exp);
-
-  for (size_t i = 0; i < num_exp; ++i) {
-    size_t t = (params.PolyLen() / (1ULL << i)) + 1;
-    auto tau_sk_reg = Automorphism(params, sk_reg, t);
-    auto tau_sk_reg_ntt = ToNtt(params, tau_sk_reg);
-    auto prod = Multiply(params, tau_sk_reg_ntt, g_exp_ntt);
-    auto sample = GetFreshRegevPublicKey(params, sk_reg, m_exp, rng, rng_pub);
-
-    PolyMatrixNtt padded_prod = prod.PadTop(1);
-    auto w_exp_i = Add(params, sample, padded_prod);
-    res.push_back(std::move(w_exp_i));
-  }
-  return res;
-}
-
-PolyMatrixNtt CondenseMatrix(const Params& params, const PolyMatrixNtt& a) {
-  PolyMatrixNtt res = PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(),
-                                          a.Rows(), a.Cols());
-  for (size_t i = 0; i < a.Rows(); ++i) {
-    for (size_t j = 0; j < a.Cols(); ++j) {
-      auto res_poly = res.Poly(i, j);
-      const auto a_poly = a.Poly(i, j);
-      if (a_poly.size() < 2 * params.PolyLen()) {
-        continue;
-      }
-      for (size_t z = 0; z < params.PolyLen(); ++z) {
-        res_poly[z] = a_poly[z] | (a_poly[z + params.PolyLen()] << 32);
-      }
-    }
-  }
-
-  return res;
 }
 
 // Packs a vector of polynomial matrices by combining CRT coefficients (0 and 1)
@@ -265,6 +195,7 @@ PolyMatrixRaw DecryptCtRegMeasured(const SpiralClient& client,
                                    const PolyMatrixNtt& ct,
                                    size_t coeffs_to_measure) {
   PolyMatrixRaw dec_result = FromNtt(params, client.DecryptMatrixRegev(ct));
+
   PolyMatrixRaw dec_rescaled = PolyMatrixRaw::Zero(
       params.PolyLen(), dec_result.Rows(), dec_result.Cols());
 
@@ -273,9 +204,7 @@ PolyMatrixRaw DecryptCtRegMeasured(const SpiralClient& client,
         dec_result.Data()[i], params.Modulus(), params.PtModulus());
   }
 
-  // measure noise width
-  // let s_2 = measure_noise_width_squared(params, client, ct, &dec_rescaled,
-  // coeffs_to_measure);
+  // Measure noise width
   double s_2 = MeasureNoiseWidthSquared(client, params, ct, dec_rescaled,
                                         coeffs_to_measure);
   std::cout << "[DEBUG] log2(measured noise): " << std::log2(s_2) << std::endl;
@@ -328,7 +257,8 @@ std::vector<uint32_t> LWEClient::Encrypt(yacl::crypto::Prg<uint64_t>& rng,
 
 std::vector<uint32_t> LWEClient::EncryptMany(yacl::crypto::Prg<uint64_t>& rng,
                                              std::vector<uint32_t> v_pt) {
-  assert(v_pt.size() == lwe_params_.n);
+  YACL_ENFORCE_EQ(v_pt.size(), lwe_params_.n,
+                  "Plaintext vector size must equal n");
 
   yacl::crypto::Prg<uint64_t> rng_noise(yacl::crypto::SecureRandU128());
   DiscreteGaussian dg(lwe_params_.noise_width);
@@ -363,8 +293,9 @@ std::vector<uint32_t> LWEClient::EncryptMany(yacl::crypto::Prg<uint64_t>& rng,
 }
 
 uint32_t LWEClient::Decrypt(const std::vector<uint32_t>& ct) const {
-  assert(ct.size() == lwe_params_.n + 1);
-  uint32_t sum = 0;
+  YACL_ENFORCE_EQ(ct.size(), lwe_params_.n + 1,
+                  "Invalid ciphertext size in LWE decrypt");
+  uint32_t sum = 0;  // Note: uint32_t overflow is well-defined (wraps around)
 
   for (size_t i = 0; i < lwe_params_.n; ++i) {
     sum += ct[i] * sk_[i];
@@ -420,12 +351,12 @@ std::vector<uint64_t> YClient::RlwesToLwes(
   return lwes;
 }
 
-std::vector<PolyMatrixRaw> YClient::GenerateQueryImpl(uint128_t seed,
+std::vector<PolyMatrixRaw> YClient::GenerateQueryImpl(uint8_t public_seed_idx,
                                                       size_t dim_log2,
                                                       bool packing,
                                                       size_t index) {
   const bool multiply_ct = true;
-  yacl::crypto::Prg<uint64_t> rng_pub(seed);
+  yacl::crypto::Prg<uint64_t> rng_pub(public_seed_idx);
   std::vector<PolyMatrixRaw> out;
   const size_t num_iterations = (1ULL << dim_log2);
   out.reserve(num_iterations);
@@ -465,10 +396,11 @@ std::vector<PolyMatrixRaw> YClient::GenerateQueryImpl(uint128_t seed,
   return out;
 }
 
-std::vector<uint64_t> YClient::GenerateQuery(bool is_query_row, size_t dim_log2,
-                                             bool packing, size_t index_row) {
+std::vector<uint64_t> YClient::GenerateQuery(uint8_t public_seed_idx,
+                                             size_t dim_log2, bool packing,
+                                             size_t index_row) {
   uint128_t seed = yacl::crypto::SecureRandU128();
-  if (is_query_row && !packing) {
+  if (public_seed_idx == SEED_0 && !packing) {
     // fast path
     LWEParams lwe_params = LWEParams::Default();
     const size_t dim = 1ULL << (dim_log2 + params_.PolyLenLog2());
@@ -505,14 +437,14 @@ std::vector<uint64_t> YClient::GenerateQuery(bool is_query_row, size_t dim_log2,
   }
 }
 
-std::vector<uint64_t> YClient::GenerateQueryLweLowMem(uint128_t seed,
+std::vector<uint64_t> YClient::GenerateQueryLweLowMem(uint8_t public_seed_idx,
                                                       size_t dim_log2,
                                                       bool packing,
                                                       size_t index_row) {
   const size_t index = index_row;
   const bool multiply_ct = true;
 
-  yacl::crypto::Prg<uint64_t> rng_pub(seed);
+  yacl::crypto::Prg<uint64_t> rng_pub(public_seed_idx);
   std::vector<uint64_t> out;
 
   const size_t num_iterations = (1ULL << dim_log2);
@@ -561,7 +493,7 @@ YPIRQuery YClient::GenerateFullQuery(size_t target_idx) {
 
   auto sk_reg = spiral_client_.GetSkRegev();
   yacl::crypto::Prg<uint64_t> rng_noise(yacl::crypto::SecureRandU128());
-  yacl::crypto::Prg<uint64_t> rng_pub_static(yacl::crypto::SecureRandU128());
+  yacl::crypto::Prg<uint64_t> rng_pub_static(kStaticSeed2);
 
   auto pack_pub_params =
       RawGenerateExpansionParams(params_, sk_reg, params_.PolyLenLog2(),
@@ -582,9 +514,7 @@ YPIRQuery YClient::GenerateFullQuery(size_t target_idx) {
              params_.PolyLen() * sizeof(uint64_t));
 
   // generate query
-  bool is_query_row = true;
-  auto query_row =
-      GenerateQuery(is_query_row, params_.DbDim1(), false, target_row);
+  auto query_row = GenerateQuery(SEED_0, params_.DbDim1(), false, target_row);
 
   // 提取最后一行
   const size_t query_row_start_idx = lwe_client_.LweParams().n * db_rows;
@@ -601,8 +531,8 @@ YPIRQuery YClient::GenerateFullQuery(size_t target_idx) {
   packed_query_row_u32.resize(params_.DbRowsPadded(), 0);
   assert(packed_query_row_u32.size() == params_.DbRowsPadded());
 
-  is_query_row = false;
-  auto query_col_vec = GenerateQuery(false, params_.DbDim2(), true, target_col);
+  auto query_col_vec =
+      GenerateQuery(SEED_1, params_.DbDim2(), true, target_col);
   const size_t query_col_start_idx = params_.PolyLen() * db_cols;
   std::vector<uint64_t> query_col_last_row(
       query_col_vec.begin() + query_col_start_idx, query_col_vec.end());
@@ -614,25 +544,53 @@ YPIRQuery YClient::GenerateFullQuery(size_t target_idx) {
 }
 
 YPIRSimpleQuery YClient::GenerateFullQuerySimplepir(uint64_t target_idx) {
-  size_t db_rows = 1 << params_.DbDim1();
-  size_t db_cols = 1 << params_.DbDim2();
+  size_t db_rows = 1ULL << (params_.DbDim1() + params_.PolyLenLog2());
+  size_t db_cols = params_.Instances() * params_.PolyLen();
+
   size_t target_row = static_cast<size_t>(target_idx / db_cols);
+  size_t target_col = static_cast<size_t>(target_idx % db_cols);
 
-  std::vector<uint64_t> pack_pub_params_row_1s_pm(
-      params_.PolyLenLog2() * params_.TExpLeft() * params_.PolyLen());
+  SPDLOG_INFO("Target item: {} ({}, {})", target_idx, target_row, target_col);
 
-  bool is_query_row = true;
-  auto query_row_last_row =
-      GenerateQueryLweLowMem(is_query_row, params_.DbDim1(), true, target_row);
+  // -----------------------------------------------------------------------
+  // 2. 生成 Public Params (Packing Keys)
+  // -----------------------------------------------------------------------
 
-  std::vector<uint64_t> packed_query_row(db_rows);
-  for (size_t i = 0; i < std::min(db_rows, query_row_last_row.size()); ++i) {
-    uint64_t crt0 = query_row_last_row[i] % params_.Moduli(0);
-    uint64_t crt1 = query_row_last_row[i] % params_.Moduli(1);
-    packed_query_row[i] = crt0 | (crt1 << 32);
+  auto sk_reg = spiral_client_.GetSkRegev();
+
+  yacl::crypto::Prg<uint64_t> rng_pub(yacl::crypto::SecureRandU128());
+  yacl::crypto::Prg<uint64_t> rng_priv(kStaticSeed2);
+
+  std::vector<PolyMatrixNtt> pack_pub_params =
+      RawGenerateExpansionParams(params_, sk_reg, params_.PolyLenLog2(),
+                                 params_.TExpLeft(), rng_pub, rng_priv);
+
+  std::vector<PolyMatrixNtt> pack_pub_params_row_1s;
+  pack_pub_params_row_1s.reserve(pack_pub_params.size());
+
+  for (const auto& matrix : pack_pub_params) {
+    PolyMatrixNtt row1 = matrix.SubMatrix(1, 0, 1, matrix.Cols());
+    pack_pub_params_row_1s.push_back(std::move(row1));
   }
 
-  return {packed_query_row, pack_pub_params_row_1s_pm};
+  std::vector<uint64_t> pack_pub_params_row_1s_pm =
+      PackVecPm(params_, 1, params_.TExpLeft(), pack_pub_params_row_1s);
+
+  // -----------------------------------------------------------------------
+  // 3. 生成 Query (SimplePIR LWE Sample)
+  // -----------------------------------------------------------------------
+
+  std::vector<uint64_t> query_row_last_row =
+      GenerateQueryLweLowMem(SEED_0, params_.DbDim1(), true, target_row);
+
+  if (query_row_last_row.size() != db_rows) {
+    SPDLOG_WARN("Query size mismatch: expected {}, got {}", db_rows,
+                query_row_last_row.size());
+  }
+  std::vector<uint64_t> packed_query_row =
+      PackQuery(params_, query_row_last_row);
+
+  return {std::move(packed_query_row), std::move(pack_pub_params_row_1s_pm)};
 }
 
 // ===================================================================================
@@ -642,6 +600,8 @@ YPIRSimpleQuery YClient::GenerateFullQuerySimplepir(uint64_t target_idx) {
 YPIRClient::YPIRClient(const Params& params) : params_(params) {}
 
 std::array<uint8_t, 20> YPIRClient::Hash(const std::string& target_item) {
+  // TODO: Replace with actual SHA implementation
+  // The current implementation is a placeholder
   std::array<uint8_t, 20> hash_result = {0};
   for (size_t i = 0; i < std::min(target_item.size(), size_t(20)); ++i) {
     hash_result[i] = static_cast<uint8_t>(target_item[i]);
@@ -670,7 +630,8 @@ std::pair<YPIRQuery, uint128_t> YPIRClient::GenerateQueryNormal(
 
 std::pair<YPIRSimpleQuery, uint128_t> YPIRClient::GenerateQuerySimplepir(
     size_t target_row) {
-  uint64_t target_idx = static_cast<uint64_t>(target_row);
+  uint64_t target_idx = static_cast<uint64_t>(target_row) *
+                        params_.Instances() * params_.PolyLen();
   uint128_t client_seed = yacl::crypto::SecureRandU128();
   auto client = SpiralClient(params_);
   YClient y_client(client, params_, client_seed);
@@ -681,9 +642,7 @@ std::pair<YPIRSimpleQuery, uint128_t> YPIRClient::GenerateQuerySimplepir(
 uint64_t YPIRClient::DecodeResponseNormal(
     const uint128_t seed, const std::vector<uint8_t>& response_data) {
   auto client = SpiralClient(params_, seed);
-
   YClient y_client = YClient(client, params_, seed);
-
   uint64_t out =
       YPIRClient::DecodeResponseNormalYClient(params_, y_client, response_data);
 
@@ -741,6 +700,7 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
 
   for (size_t z = 0; z < lwe_params.n; ++z) {
     uint64_t val = read_bits(outer_ct_t_u8, bit_offs, lwe_q_prime_bits);
+    bit_offs += lwe_q_prime_bits;
     assert(val < lwe_q_prime && "val >= lwe_q_prime");
     inner_ct.Data()[z] = arith::Rescale(val, lwe_q_prime, lwe_params.modulus);
   }
@@ -751,11 +711,8 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
     val |= outer_ct[special_offs + i] << (i * pt_bits);
   }
   assert(val < lwe_q_prime && "val >= lwe_q_prime");
-  std::cout << "[DEBUG] got b_val of: " << val << std::endl;
   inner_ct.Data()[lwe_params.n] =
       arith::Rescale(val, lwe_q_prime, lwe_params.modulus);
-
-  std::cout << "[DEBUG] decrypting inner ct..." << std::endl;
 
   std::vector<uint32_t> inner_ct_as_u32;
   inner_ct_as_u32.reserve(lwe_params.n + 1);
@@ -793,11 +750,7 @@ std::vector<uint64_t> YPIRClient::DecodeResponseSimplepirYClient(
         PolyMatrixRaw::Recover(params, rlwe_q_prime_1, rlwe_q_prime_2, chunk));
   }
 
-  // debug!("decrypting outer cts...");
-  std::cout << "[DEBUG] Decrypting outer ciphertexts..." << std::endl;
-
   std::vector<uint64_t> outer_ct;
-  // 预分配内存
   outer_ct.reserve(num_rlwe_outputs * params.PolyLen());
 
   for (const auto& ct : response) {

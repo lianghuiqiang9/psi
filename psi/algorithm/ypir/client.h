@@ -10,30 +10,11 @@
 #include "psi/algorithm/spiral/discrete_gaussian.h"
 #include "psi/algorithm/spiral/poly_matrix.h"
 #include "psi/algorithm/spiral/spiral_client.h"
+#include "psi/algorithm/ypir/params.h"
 
 namespace psi::ypir {
 
 using namespace psi::spiral;
-
-struct LWEParams {
-  size_t n = 1024;
-  uint64_t modulus = 1ULL << 32;
-  uint64_t pt_modulus = 1ULL << 8;
-  size_t q2_bits = 28;
-  double noise_width = 27.57291103;
-
-  uint64_t ScaleK() const { return modulus / pt_modulus; }
-  static LWEParams Default() { return LWEParams(); }
-  uint64_t GetQPrime2() const {
-    const size_t modulus_bits =
-        static_cast<size_t>(std::ceil(std::log2(static_cast<double>(modulus))));
-    if (q2_bits == modulus_bits) {
-      return modulus;
-    } else {
-      return kQ2Values[q2_bits];
-    }
-  }
-};
 
 class LWEClient {
  private:
@@ -72,12 +53,10 @@ class YClient {
 
   std::vector<uint64_t> RlwesToLwes(
       const std::vector<spiral::PolyMatrixRaw>& ct) const;
-  std::vector<spiral::PolyMatrixRaw> GenerateQueryImpl(uint128_t seed,
-                                                       size_t dim_log2,
-                                                       bool packing,
-                                                       size_t index);
-  std::vector<uint64_t> GenerateQueryLweLowMem(uint128_t seed, size_t dim_log2,
-                                               bool packing, size_t index_row);
+
+  std::vector<uint64_t> GenerateQueryLweLowMem(uint8_t public_seed_idx,
+                                               size_t dim_log2, bool packing,
+                                               size_t index_row);
 
  public:
   YClient(const SpiralClient& client, const Params& params);
@@ -86,8 +65,11 @@ class YClient {
 
   const SpiralClient& GetSpiralClient() const { return spiral_client_; }
   const LWEClient& GetLweClient() const { return lwe_client_; }
-
-  std::vector<uint64_t> GenerateQuery(bool is_query_row, size_t dim_log2,
+  std::vector<spiral::PolyMatrixRaw> GenerateQueryImpl(uint8_t public_seed_idx,
+                                                       size_t dim_log2,
+                                                       bool packing,
+                                                       size_t index);
+  std::vector<uint64_t> GenerateQuery(uint8_t public_seed_idx, size_t dim_log2,
                                       bool packing, size_t index_row);
 
   YPIRQuery GenerateFullQuery(size_t target_idx);

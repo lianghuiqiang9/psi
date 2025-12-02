@@ -276,9 +276,9 @@ class Params {
 
   [[nodiscard]] size_t CrtCount() const { return crt_params_.crt_count_; }
 
-  [[nodiscard]] uint64_t DbDim2() const { return query_params_.db_dim2_; }
+  [[nodiscard]] size_t DbDim2() const { return query_params_.db_dim2_; }
 
-  [[nodiscard]] uint64_t DbDim1() const { return query_params_.db_dim1_; }
+  [[nodiscard]] size_t DbDim1() const { return query_params_.db_dim1_; }
 
   [[nodiscard]] uint64_t Modulus() const {
     return crt_params_.modulus_.value();
@@ -398,11 +398,11 @@ class Params {
   }
 
   size_t Rho() const;
+  void SetDbDim1(size_t v1) { query_params_.db_dim1_ = v1; }
+  void SetDbDim2(size_t v2) { query_params_.db_dim2_ = v2; }
 
  private:
   void ComputeId();
-  void SetDbDim1(size_t v1) { query_params_.db_dim1_ = v1; }
-  void SetDbDim2(size_t v2) { query_params_.db_dim2_ = v2; }
 
   // d in R = Z[x]/x^d + 1
   std::size_t poly_len_ = 0;

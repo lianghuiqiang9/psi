@@ -618,7 +618,7 @@ std::vector<PolyMatrixNtt> SpiralServer::GetVFoldingNeg(
     // -C
     auto ct_gsw_inv =
         PolyMatrixRaw::Zero(params_.PolyLen(), 2, 2 * params_.TGsw());
-    Invert(params_, ct_gsw_inv, FromNtt(params_, v_folding[i]));
+    Negate(params_, ct_gsw_inv, FromNtt(params_, v_folding[i]));
     // G_{n+1, z} - C
     auto ct_gsw_neg = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(),
                                           2, 2 * params_.TGsw());
@@ -963,7 +963,7 @@ std::vector<PolyMatrixNtt> GetVneg1(const Params& params) {
     auto idx = params.PolyLen() - (static_cast<size_t>(1) << j);
     auto ng1 = PolyMatrixRaw::Zero(params.PolyLen(), 1, 1);
     ng1.Data()[idx] = 1ULL;
-    v_neg1.push_back(ToNtt(params, Invert(params, ng1)));
+    v_neg1.push_back(ToNtt(params, Negate(params, ng1)));
   }
   return v_neg1;
 }

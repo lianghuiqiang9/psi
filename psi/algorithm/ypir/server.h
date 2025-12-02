@@ -1,42 +1,60 @@
-// Copyright 2025 The secretflow authors.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <cstdint>
 #include <vector>
 
-namespace pir::ypir {
-class YPIRServer {
- public:
-  YPIRServer(size_t row_num, size_t col_num, size_t d1, size_t d2, uint64_t p,
-             uint64_t q1, uint64_t q2, uint128_t seed);
+#include "absl/types/span.h"
 
-  void gen_db();
+#include "psi/algorithm/spiral/params.h"
+#include "psi/algorithm/spiral/poly_matrix.h"
+#include "psi/algorithm/ypir/types.h"
+
+namespace psi::ypir {
+using namespace psi::spiral;
+
+template <typename T>
+class YPirServer {
+ public:
+  YPirServer(const Params& params_in, const std::vector<T>& input_db,
+             bool is_simplepir, bool inp_transposed, bool pad_rows_in);
+
+  size_t GetDbCols() const;
+  const T* db() const;
+  std::vector<uint64_t> GenerateHint0Ring() const;
+  void WriteVecU64ToFile(std::string_view path,
+                         const std::vector<uint64_t>& data) const;
+  std::vector<PolyMatrixNtt> GeneratePseudorandomQuery(
+      uint8_t public_seed_idx) const;
+  std::vector<uint64_t> MultiplyWithDbRing(
+      const std::vector<PolyMatrixNtt>& preprocessed_query, size_t col_start,
+      size_t col_end, uint8_t seed_idx) const;
+
+  std::vector<uint64_t> AnswerHintRing(uint8_t public_seed_idx,
+                                       size_t cols) const;
+
+  OfflinePrecomputedValues PerformOfflinePrecomputation();
+
+  std::vector<std::vector<uint8_t>> PerformOnlineComputation(
+      OfflinePrecomputedValues& offline_vals,
+      const std::vector<uint32_t>& first_dim_queries_packed,
+      const std::vector<std::pair<std::vector<uint64_t>,
+                                  std::vector<uint64_t>>>& second_dim_queries);
+
+  OfflinePrecomputedValues PerformOfflinePrecomputationSimplepir(
+      absl::Span<const uint64_t> hint_0_load,
+      std::string_view hint_0_store_path);
+
+  std::vector<uint8_t> PerformOnlineComputationSimplepir(
+      absl::Span<const uint64_t> first_dim_queries_packed,
+      const OfflinePrecomputedValues& offline_vals,
+      absl::Span<const absl::Span<const uint64_t>> pack_pub_params_row_1s);
 
  private:
-  size_t row_num_;
-  size_t col_num_;
-  size_t d1_;
-  size_t d2_;
-  uint64_t p_;
-  uint64_t q1_;
-  uint64_t q2_;
-  uint128_t seed_;
-  uint64_t delta1_;
-  uint64_t delta2_;
-  std::vector<std::vector<uint64_t>> database_;
+  const Params params_;
+  Params smaller_params_;
+  std::vector<uint64_t> db_buf_;
+  bool pad_rows_;
+  bool is_simplepir_;
 };
 
-}  // namespace pir::ypir
+}  // namespace psi::ypir

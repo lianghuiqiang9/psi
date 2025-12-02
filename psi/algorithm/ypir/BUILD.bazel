@@ -17,10 +17,22 @@ load("//bazel:psi.bzl", "psi_cc_library", "psi_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 psi_cc_library(
+    name = "convolution",
+    srcs = ["convolution.cc"],
+    hdrs = ["convolution.h"],
+    deps = [
+        "//psi/algorithm/spiral:poly_matrix",
+        "//psi/algorithm/spiral:poly_matrix_utils",
+        "@yacl//yacl/crypto/rand",
+    ],
+)
+
+psi_cc_library(
     name = "client",
     srcs = ["client.cc"],
     hdrs = ["client.h"],
     deps = [
+        "params",
         ":util",
         "//psi/algorithm/spiral:discrete_gaussian",
         "//psi/algorithm/spiral:gadget",
@@ -28,63 +40,44 @@ psi_cc_library(
         "//psi/algorithm/spiral:poly_matrix_utils",
         "//psi/algorithm/spiral:spiral_client",
         "//psi/algorithm/spiral/arith:number_theory",
-        "@abseil-cpp//absl/types:span",
         "@yacl//yacl/crypto/rand",
     ],
 )
 
 psi_cc_library(
-    name = "ypir_client",
-    srcs = ["ypir_client.cc"],
-    hdrs = ["ypir_client.h"],
+    name = "types",
+    hdrs = ["types.h"],
     deps = [
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral:poly_matrix",
+        "//psi/algorithm/spiral:poly_matrix_utils",
+    ],
+)
+
+psi_cc_library(
+    name = "server",
+    srcs = ["server.cc"],
+    hdrs = [
+        "server.h",
+        "types.h",
+    ],
+    deps = [
+        ":client",
+        ":convolution",
+        ":params",
+        ":types",
         ":util",
+        "//psi/algorithm/spiral:discrete_gaussian",
+        "//psi/algorithm/spiral:gadget",
+        "//psi/algorithm/spiral:params",
         "//psi/algorithm/spiral:poly_matrix",
         "//psi/algorithm/spiral:poly_matrix_utils",
         "//psi/algorithm/spiral:spiral_client",
-    ],
-)
-
-psi_cc_library(
-    name = "ypir_server",
-    srcs = ["ypir_server.cc"],
-    hdrs = ["ypir_server.h"],
-    deps = [
-        ":util",
-        "//psi/algorithm/spiral:poly_matrix",
-        "//psi/algorithm/spiral:poly_matrix_utils",
-    ],
-)
-
-psi_cc_test(
-    name = "client_test",
-    srcs = ["client_test.cc"],
-    deps = [
-        ":client",
+        "//psi/algorithm/spiral/arith",
+        "//psi/algorithm/spiral/arith:arith_params",
+        "//psi/algorithm/spiral/arith:number_theory",
+        "@abseil-cpp//absl/types:span",
         "@yacl//yacl/crypto/rand",
-        "@yacl//yacl/crypto/tools:prg",
-    ],
-)
-
-psi_cc_test(
-    name = "ypir_client_test",
-    srcs = ["ypir_client_test.cc"],
-    deps = [
-        ":util",
-        ":ypir_client",
-        "@yacl//yacl/crypto/rand",
-        "@yacl//yacl/crypto/tools:prg",
-    ],
-)
-
-psi_cc_test(
-    name = "ypir_server_test",
-    srcs = ["ypir_server_test.cc"],
-    deps = [
-        ":util",
-        ":ypir_server",
-        "@yacl//yacl/crypto/rand",
-        "@yacl//yacl/crypto/tools:prg",
     ],
 )
 
@@ -93,6 +86,8 @@ psi_cc_library(
     srcs = ["params.cc"],
     hdrs = ["params.h"],
     deps = [
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral:util",
     ],
 )
 
@@ -101,6 +96,7 @@ psi_cc_library(
     srcs = ["util.cc"],
     hdrs = ["util.h"],
     deps = [
+        ":types",
         "//psi/algorithm/spiral:gadget",
         "//psi/algorithm/spiral:params",
         "//psi/algorithm/spiral:poly_matrix",
@@ -123,3 +119,76 @@ psi_cc_test(
         "@yacl//yacl/crypto/tools:prg",
     ],
 )
+
+psi_cc_test(
+    name = "integration_test",
+    srcs = ["integration_test.cc"],
+    deps = [
+        ":client",
+        ":server",
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral:spiral_client",
+        "//psi/algorithm/spiral:util",
+    ],
+)
+
+psi_cc_test(
+    name = "rescale_test",
+    srcs = ["rescale_test.cc"],
+    deps = [
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral/arith",
+    ],
+)
+
+psi_cc_test(
+    name = "scale_k_test",
+    srcs = ["scale_k_test.cc"],
+    deps = [
+        ":client",
+        ":server",
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral/arith",
+    ],
+)
+
+psi_cc_test(
+    name = "simplepir_minimal_test",
+    srcs = ["simplepir_minimal_test.cc"],
+    deps = [
+        ":client",
+        ":server",
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral:spiral_client",
+    ],
+)
+
+psi_cc_test(
+    name = "fast_dot_product_test",
+    srcs = ["fast_dot_product_test.cc"],
+    deps = [
+        ":util",
+        "//psi/algorithm/spiral:params",
+    ],
+)
+
+psi_cc_test(
+    name = "simplepir_basic_flow_test",
+    srcs = ["simplepir_basic_flow_test.cc"],
+    deps = [
+        ":util",
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral/arith",
+    ],
+)
+
+psi_cc_test(
+    name = "automorphism_test",
+    srcs = ["automorphism_test.cc"],
+    deps = [
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral:poly_matrix_utils",
+    ],
+)
+
+

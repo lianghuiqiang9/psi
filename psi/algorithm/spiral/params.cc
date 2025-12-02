@@ -163,6 +163,7 @@ std::uint64_t Params::CrtCompose2(std::uint64_t x, std::uint64_t y) const {
                                         crt_params_.modulus_.value());
 }
 
+// TODO: optimize memory copy span?
 std::uint64_t Params::CrtCompose(const std::vector<std::uint64_t>& a,
                                  std::size_t idx) const {
   if (crt_params_.crt_count_ == 1) {

@@ -129,7 +129,7 @@ PolyMatrixRaw SpiralClient::GetFreshGswPublicKey(
   auto a_ntt = ToNtt(params_, a);
   auto e = Noise(params_, n, m, dg_, rng);
   auto e_ntt = ToNtt(params_, e);
-  auto a_inv = Invert(params_, a);
+  auto a_inv = Negate(params_, a);
   auto sk_gsw_ntt = ToNtt(params_, sk_gsw_);
   auto b_p = Multiply(params_, sk_gsw_ntt, a_ntt);
   auto b = Add(params_, e_ntt, b_p);
@@ -143,7 +143,7 @@ PolyMatrixNtt SpiralClient::GetRegevSample(
     yacl::crypto::Prg<uint64_t>& rng_pub) const {
   auto a = PolyMatrixRaw::RandomPrg(params_, 1, 1, rng_pub);
   auto a_ntt = ToNtt(params_, a);
-  auto a_inv = ToNtt(params_, Invert(params_, a));
+  auto a_inv = ToNtt(params_, Negate(params_, a));
   auto e = Noise(params_, 1, 1, dg_, rng);
 
   auto e_ntt = ToNtt(params_, e);
@@ -158,29 +158,27 @@ PolyMatrixNtt SpiralClient::GetRegevSample(
 }
 
 PolyMatrixNtt SpiralClient::GetScaledRegevSample(
-    yacl::crypto::Prg<uint64_t>& rng,
-    yacl::crypto::Prg<uint64_t>& rng_pub,
+    yacl::crypto::Prg<uint64_t>& rng, yacl::crypto::Prg<uint64_t>& rng_pub,
     uint64_t scale) const {
+  auto a = PolyMatrixRaw::RandomPrg(params_, 1, 1, rng_pub);
+  auto a_ntt = ToNtt(params_, a);
+  auto a_inv = ToNtt(params_, Negate(params_, a));
+  auto e = Noise(params_, 1, 1, dg_, rng);
 
-    auto a = PolyMatrixRaw::RandomPrg(params_, 1, 1, rng_pub);
-    auto a_ntt = ToNtt(params_, a);
-    auto a_inv = ToNtt(params_, Invert(params_, a));
-    auto e = Noise(params_, 1, 1, dg_, rng);
+  for (size_t i = 0; i < params_.PolyLen(); ++i) {
+    e.Data()[i] = arith::MultiplyUintMod(e.Data()[i], scale, params_.Modulus());
+  }
 
-    for (size_t i = 0; i < params_.PolyLen(); ++i) {
-        e.Data()[i] = arith::MultiplyUintMod(e.Data()[i], scale, params_.Modulus());
-    }
+  auto e_ntt = ToNtt(params_, e);
+  auto sk_reg_ntt = ToNtt(params_, sk_reg_);
+  auto b_p = Multiply(params_, sk_reg_ntt, a_ntt);
+  auto b = Add(params_, e_ntt, b_p);
 
-    auto e_ntt = ToNtt(params_, e);
-    auto sk_reg_ntt = ToNtt(params_, sk_reg_);
-    auto b_p = Multiply(params_, sk_reg_ntt, a_ntt);
-    auto b = Add(params_, e_ntt, b_p);
+  auto p = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(), 2, 1);
+  p.CopyInto(a_inv, 0, 0);
+  p.CopyInto(b, 1, 0);
 
-    auto p = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(), 2, 1);
-    p.CopyInto(a_inv, 0, 0); 
-    p.CopyInto(b, 1, 0);
-
-    return p;
+  return p;
 }
 
 PolyMatrixNtt SpiralClient::GetFreshRegevPublicKey(
@@ -193,16 +191,14 @@ PolyMatrixNtt SpiralClient::GetFreshRegevPublicKey(
   return p;
 }
 
-
 PolyMatrixNtt SpiralClient::GetFreshScaledRegevPublicKey(
     size_t m, yacl::crypto::Prg<uint64_t>& rng,
-    yacl::crypto::Prg<uint64_t>& rng_pub,
-    uint64_t scale) const {
-    auto p = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(), 2, m);
-    for (size_t i = 0; i < m; ++i) {
-        p.CopyInto(GetScaledRegevSample(rng, rng_pub, scale), 0, i);
-    }
-    return p;
+    yacl::crypto::Prg<uint64_t>& rng_pub, uint64_t scale) const {
+  auto p = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(), 2, m);
+  for (size_t i = 0; i < m; ++i) {
+    p.CopyInto(GetScaledRegevSample(rng, rng_pub, scale), 0, i);
+  }
+  return p;
 }
 
 PolyMatrixNtt SpiralClient::EncryptMatrixGsw(
@@ -225,7 +221,6 @@ PolyMatrixNtt SpiralClient::EncryptMatrixRegev(
   auto p = GetFreshRegevPublicKey(m, rng, rng_pub);
   return Add(params_, p, a.PadTop(1));
 }
-
 
 PolyMatrixNtt SpiralClient::EncryptMatrixScaledRegev(
     PolyMatrixNtt& a, yacl::crypto::Prg<uint64_t>& rng,
