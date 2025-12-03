@@ -85,7 +85,7 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
   EXPECT_GT(server_elapsed.count(), 0);
 
   // Verify server database storage
-  const uint16_t* server_db = server.db();
+  const uint16_t* server_db = server.Db();
   size_t padded_rows = params.DbRowsPadded();
   SPDLOG_INFO(
       "Verifying database storage: db_rows={}, db_cols={}, padded_rows={}",
@@ -235,10 +235,149 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
   }
 }
 
-// TODO: Implement DoublePIR online computation method
-TEST_F(YPIRIntegrationTest, DISABLED_DoublePIRBasicFlow) {
+// DoublePIR test based on Rust scheme.rs test_ypir_basic
+// This tests the full DoublePIR flow with a smaller database for testing
+TEST_F(YPIRIntegrationTest, DoublePIRBasicFlow) {
+  SPDLOG_INFO("=== DoublePIR Basic Flow Test ===");
+
+  // Use smaller parameters for testing: 32KB database
+  // Parameters scaled down for testing infrastructure
+  std::size_t poly_len = 2048;
+  std::vector<std::uint64_t> moduli = {268369921, 249561089};
+  double noise_width = 6.4;
+
+  // DoublePIR configuration for 32KB database
+  // db_dim_1 + poly_len_log2 determines rows, db_dim_2 + poly_len_log2
+  // determines cols
+  // Use pt_modulus=32768 (15 bits) to ensure special_offs < poly_len
+  // special_offs = ceil((lwe_n=1024 * lwe_q_bits=28) / pt_bits=15) = 1912
+  // This keeps special_offs < poly_len=2048, avoiding out-of-bounds access
+  PolyMatrixParams poly_matrix_params(2, 32768, 21, 4, 8, 8, 1);
+  QueryParams query_params(1, 2,
+                           1);  // db_dim_1=1, db_dim_2=2, instances=1
+                                // 2^(1+11) = 4096 rows, 2^(2+11) = 8192 cols
+
+  Params params(poly_len, std::move(moduli), noise_width,
+                std::move(poly_matrix_params), std::move(query_params));
+
+  size_t db_rows = 1ULL << (params.DbDim1() + params.PolyLenLog2());
+  size_t db_cols = 1ULL << (params.DbDim2() + params.PolyLenLog2());
+  size_t db_size = db_rows * db_cols;
+
   SPDLOG_INFO(
-      "DoublePIR test is disabled - need to implement online computation "
-      "method");
-  GTEST_SKIP() << "DoublePIR online computation not yet implemented";
+      "DoublePIR test: db_rows={}, db_cols={}, db_size={} (~{} KB), "
+      "pt_modulus={}",
+      db_rows, db_cols, db_size, db_size / 1024, params.PtModulus());
+
+  // Create database with random uint8_t values
+  std::vector<uint8_t> db(db_size);
+  std::random_device rd;
+  std::mt19937 gen(42);  // Fixed seed for reproducibility
+  std::uniform_int_distribution<> dis(0, 255);
+  for (auto& val : db) {
+    val = static_cast<uint8_t>(dis(gen));
+  }
+
+  // Add known test values
+  if (db_size > 1000) {
+    db[0] = 42;
+    db[1] = 43;
+    db[100] = 142;
+    db[1000] = 200;
+  }
+
+  // Create server (DoublePIR uses uint8_t database)
+  auto server_start = std::chrono::high_resolution_clock::now();
+  YPirServer<uint8_t> server(
+      params, db, false, false,
+      true);  // is_simplepir=false, inp_transposed=false, pad_rows=true
+  auto server_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::high_resolution_clock::now() - server_start);
+  SPDLOG_INFO("Server setup: {} ms", server_elapsed.count());
+
+  // Offline precomputation
+  OfflinePrecomputedValues offline_vals;
+  auto offline_start = std::chrono::high_resolution_clock::now();
+  offline_vals = server.PerformOfflinePrecomputation();
+  auto offline_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::high_resolution_clock::now() - offline_start);
+  SPDLOG_INFO("Offline precomputation: {} ms", offline_elapsed.count());
+  EXPECT_GT(offline_elapsed.count(), 0);
+  EXPECT_GT(offline_vals.hint_0.size(), 0);
+  EXPECT_GT(offline_vals.hint_1.size(), 0);
+  EXPECT_NE(offline_vals.smaller_server, nullptr);
+
+  // Test querying index 0 (expected value: 42)
+  size_t target_idx = 0;
+  uint8_t expected_value = db[target_idx];
+  size_t target_row = target_idx / db_cols;
+  size_t target_col = target_idx % db_cols;
+  SPDLOG_INFO("Querying index {} (row={}, col={}, expected value: {})",
+              target_idx, target_row, target_col,
+              static_cast<int>(expected_value));
+  SPDLOG_INFO("  db[0]={}, db[1]={}, db[8191]={}, db[8192]={}",
+              static_cast<int>(db[0]), static_cast<int>(db[1]),
+              static_cast<int>(db[8191]), static_cast<int>(db[8192]));
+
+  // Client generates keys and query
+  auto client_start = std::chrono::high_resolution_clock::now();
+  uint128_t fixed_seed = yacl::MakeUint128(0, 12345);
+  SpiralClient spiral_client(params, fixed_seed);
+  YClient y_client(spiral_client, params, fixed_seed);
+
+  auto full_query = y_client.GenerateFullQuery(target_idx);
+
+  auto client_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::high_resolution_clock::now() - client_start);
+  SPDLOG_INFO("Client query generation: {} ms", client_elapsed.count());
+
+  // Server online computation
+  auto online_start = std::chrono::high_resolution_clock::now();
+
+  // Prepare queries for DoublePIR
+  std::vector<uint32_t> first_dim_queries_packed = full_query.packed_query_row;
+
+  SPDLOG_INFO("First dim query size: {}", first_dim_queries_packed.size());
+  SPDLOG_INFO("Second dim query col size: {}",
+              full_query.packed_query_col.size());
+  SPDLOG_INFO("Pack pub params size: {}",
+              full_query.pack_pub_params_row_1s_pm.size());
+
+  std::vector<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>>
+      second_dim_queries;
+  second_dim_queries.push_back(
+      {full_query.packed_query_col, full_query.pack_pub_params_row_1s_pm});
+
+  SPDLOG_INFO("Calling PerformOnlineComputation...");
+  std::vector<std::vector<uint8_t>> responses;
+  try {
+    responses = server.PerformOnlineComputation(
+        offline_vals, first_dim_queries_packed, second_dim_queries);
+  } catch (const std::exception& e) {
+    SPDLOG_ERROR("Exception in PerformOnlineComputation: {}", e.what());
+    throw;
+  }
+
+  auto online_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::high_resolution_clock::now() - online_start);
+  SPDLOG_INFO("Server online computation: {} ms", online_elapsed.count());
+
+  ASSERT_EQ(responses.size(), 1) << "Expected 1 response";
+
+  // Client decodes response
+  auto decode_start = std::chrono::high_resolution_clock::now();
+  YPIRClient ypir_client(params);
+  uint64_t decoded_value =
+      ypir_client.DecodeResponseNormalYClient(params, y_client, responses[0]);
+  auto decode_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::high_resolution_clock::now() - decode_start);
+  SPDLOG_INFO("Client decode: {} ms", decode_elapsed.count());
+
+  // Verify correctness
+  SPDLOG_INFO("Decoded value: {}, Expected: {}", decoded_value,
+              static_cast<uint64_t>(expected_value));
+  EXPECT_EQ(decoded_value, static_cast<uint64_t>(expected_value))
+      << "Decoded value mismatch";
+
+  SPDLOG_INFO("✓ DoublePIR correctness verified!");
 }

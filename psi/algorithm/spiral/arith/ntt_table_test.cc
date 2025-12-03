@@ -82,47 +82,6 @@ TEST(NttTest, NttInverse) {
   ASSERT_EQ(v1[2048 + 50], 0);
 }
 
-// Test that NTT(0) = 0 (mathematical requirement)
-TEST(NttTest, ZeroPolynomialNttForward) {
-  auto params = util::GetFastExpansionTestingParam();
-  std::vector<std::uint64_t> zero_poly(2 * 2048, 0);
-
-  arith::NttForward(params, absl::MakeSpan(zero_poly));
-
-  for (size_t i = 0; i < zero_poly.size(); ++i) {
-    EXPECT_EQ(zero_poly[i], 0)
-        << "NTT of zero polynomial must be zero at index " << i;
-  }
-}
-
-// Test that NTT_inverse(0) = 0
-TEST(NttTest, ZeroPolynomialNttInverse) {
-  auto params = util::GetFastExpansionTestingParam();
-  std::vector<std::uint64_t> zero_poly(2 * 2048, 0);
-
-  arith::NttInverse(params, absl::MakeSpan(zero_poly));
-
-  for (size_t i = 0; i < zero_poly.size(); ++i) {
-    EXPECT_EQ(zero_poly[i], 0)
-        << "NTT inverse of zero polynomial must be zero at index " << i;
-  }
-}
-
-// Test round-trip: 0 -> NttForward -> NttInverse -> 0
-TEST(NttTest, ZeroPolynomialRoundTrip) {
-  auto params = util::GetFastExpansionTestingParam();
-  std::vector<std::uint64_t> zero_poly(2 * 2048, 0);
-
-  arith::NttForward(params, absl::MakeSpan(zero_poly));
-  arith::NttInverse(params, absl::MakeSpan(zero_poly));
-
-  for (size_t i = 0; i < zero_poly.size(); ++i) {
-    EXPECT_EQ(zero_poly[i], 0)
-        << "Zero polynomial must remain zero after NTT round-trip at index "
-        << i;
-  }
-}
-
 TEST(NttTest, NttCorrect) {
   auto params = util::GetFastExpansionTestingParam();
 

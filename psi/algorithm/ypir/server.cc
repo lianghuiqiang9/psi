@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <vector>
 
 #include "spdlog/spdlog.h"
 #include "yacl/crypto/rand/rand.h"
@@ -92,9 +93,10 @@ uint64_t ReadBits(absl::Span<const uint8_t> data, size_t bit_offs,
   return result;
 }
 
-std::vector<uint16_t> SplitAlloc(
-    absl::Span<const uint64_t> buf, size_t special_bit_offs, size_t rows,
-    size_t cols, size_t out_rows, size_t inp_mod_bits, size_t pt_bits) {
+std::vector<uint16_t> SplitAlloc(absl::Span<const uint64_t> buf,
+                                 size_t special_bit_offs, size_t rows,
+                                 size_t cols, size_t out_rows,
+                                 size_t inp_mod_bits, size_t pt_bits) {
   std::vector<uint16_t> out(out_rows * cols, 0);
 
   assert(out_rows >= rows);
@@ -192,7 +194,10 @@ template <typename T>
 YPirServer<T>::YPirServer(const Params& params_in,
                           const std::vector<T>& input_db, bool is_simplepir,
                           bool inp_transposed, bool pad_rows_in)
-    : params_(params_in), pad_rows_(pad_rows_in), is_simplepir_(is_simplepir) {
+    : params_(params_in),
+      pad_rows_(pad_rows_in),
+      is_simplepir_(is_simplepir),
+      inp_transposed_(inp_transposed) {
   uint64_t db_rows = 1ULL << (params_.DbDim1() + params_.PolyLenLog2());
   uint64_t db_rows_padded = pad_rows_ ? params_.DbRowsPadded() : db_rows;
 
@@ -229,24 +234,24 @@ YPirServer<T>::YPirServer(const Params& params_in,
     }
   }
 
-  if (is_simplepir_) {
-    smaller_params_ = params_;
-  } else {
-    auto lwe_params = LWEParams::Default();
+  // if (is_simplepir_) {
+  //   smaller_params_ = params_;
+  // } else {
+  //   auto lwe_params = LWEParams::Default();
 
-    double pt_bits =
-        std::floor(std::log2(static_cast<double>(params_.PtModulus())));
-    double blowup_factor = static_cast<double>(lwe_params.q2_bits) / pt_bits;
+  //   double pt_bits =
+  //       std::floor(std::log2(static_cast<double>(params_.PtModulus())));
+  //   double blowup_factor = static_cast<double>(lwe_params.q2_bits) / pt_bits;
 
-    smaller_params_ = params_;
-    smaller_params_.SetDbDim1(params_.DbDim2());
-    double num = blowup_factor * static_cast<double>(lwe_params.n + 1);
-    double denom = static_cast<double>(params_.PolyLen());
-    size_t smaller_dim2 =
-        static_cast<size_t>(std::ceil(std::log2(num / denom)));
+  //   smaller_params_ = params_;
+  //   smaller_params_.SetDbDim1(params_.DbDim2());
+  //   double num = blowup_factor * static_cast<double>(lwe_params.n + 1);
+  //   double denom = static_cast<double>(params_.PolyLen());
+  //   size_t smaller_dim2 =
+  //       static_cast<size_t>(std::ceil(std::log2(num / denom)));
 
-    smaller_params_.SetDbDim2(smaller_dim2);
-  }
+  //   smaller_params_.SetDbDim2(smaller_dim2);
+  // }
 }
 
 template <typename T>
@@ -269,8 +274,13 @@ void YPirServer<T>::WriteVecU64ToFile(std::string_view path,
 }
 
 template <typename T>
-const T* YPirServer<T>::db() const {
+const T* YPirServer<T>::Db() const {
   return reinterpret_cast<const T*>(db_buf_.data());
+}
+
+template <typename T>
+T* YPirServer<T>::DbMut() {
+  return reinterpret_cast<T*>(db_buf_.data());
 }
 
 static uint32_t log2_uint64(uint64_t n) {
@@ -278,19 +288,45 @@ static uint32_t log2_uint64(uint64_t n) {
   return static_cast<uint32_t>(std::log2(static_cast<double>(n)));
 }
 
+// template <typename T>
+// std::vector<T> TransposeGeneric(const std::vector<T>& input, size_t rows,
+//                                 size_t cols) {
+//   if (input.size() != rows * cols) {
+//     throw std::invalid_argument("TransposeGeneric: Input size mismatch");
+//   }
+//   std::vector<T> output(input.size());
+//   for (size_t r = 0; r < rows; ++r) {
+//     for (size_t c = 0; c < cols; ++c) {
+//       output[c * rows + r] = input[r * cols + c];
+//     }
+//   }
+//   return output;
+// }
+
 template <typename T>
-std::vector<T> TransposeGeneric(const std::vector<T>& input, size_t rows,
-                                size_t cols) {
-  if (input.size() != rows * cols) {
-    throw std::invalid_argument("TransposeGeneric: Input size mismatch");
+std::vector<T> TransposeGeneric(const std::vector<T>& a, size_t a_rows,
+                                size_t a_cols) {
+  size_t transpose_tile_size = std::min({size_t(32), a_rows, a_cols});
+
+  if (a_rows % transpose_tile_size != 0 || a_cols % transpose_tile_size != 0) {
+    transpose_tile_size = 1;
   }
-  std::vector<T> output(input.size());
-  for (size_t r = 0; r < rows; ++r) {
-    for (size_t c = 0; c < cols; ++c) {
-      output[c * rows + r] = input[r * cols + c];
+
+  std::vector<T> out(a_rows * a_cols);
+
+  for (size_t i_outer = 0; i_outer < a_rows; i_outer += transpose_tile_size) {
+    for (size_t j_outer = 0; j_outer < a_cols; j_outer += transpose_tile_size) {
+      for (size_t i_inner = 0; i_inner < transpose_tile_size; ++i_inner) {
+        for (size_t j_inner = 0; j_inner < transpose_tile_size; ++j_inner) {
+          size_t i = i_outer + i_inner;
+          size_t j = j_outer + j_inner;
+          out[j * a_rows + i] = a[i * a_cols + j];
+        }
+      }
     }
   }
-  return output;
+
+  return out;
 }
 
 template <typename T>
@@ -342,7 +378,7 @@ std::vector<uint64_t> YPirServer<T>::MultiplyWithDbRing(
   size_t num_cols = col_end - col_start;
   result.reserve(num_cols * poly_len);
 
-  const T* db_ptr = this->db();
+  const T* db_ptr = Db();
 
   auto prod = PolyMatrixNtt::Zero(params_.CrtCount(), params_.PolyLen(), 1, 1);
   auto db_elem_poly = PolyMatrixRaw::Zero(params_.PolyLen(), 1, 1);
@@ -410,6 +446,7 @@ std::vector<uint64_t> YPirServer<T>::GenerateHint0Ring() const {
   std::vector<uint64_t> hint_0(n * db_cols, 0);
   size_t convd_len = conv_params.CrtCount() * conv_params.PolyLen();
 
+  // 和 client 使用相同种子
   yacl::crypto::Prg<uint32_t> rng_pub(SEED_0);
 
   std::vector<std::vector<uint32_t>> v_nega_perm_a;
@@ -441,7 +478,7 @@ std::vector<uint64_t> YPirServer<T>::GenerateHint0Ring() const {
   uint32_t log2_max_adds = log2_modulus - log2_conv_output - 1;
   size_t max_adds = 1ULL << log2_max_adds;
 
-  const T* db_view = db();
+  const T* db_view = Db();
 
   std::vector<uint64_t> tmp_col(convd_len, 0);
   std::vector<uint32_t> col_poly_u32(convd_len, 0);
@@ -542,7 +579,19 @@ OfflinePrecomputedValues YPirServer<T>::PerformOfflinePrecomputation() {
   std::vector<uint64_t> combined_hint_1 = hint_1;
   combined_hint_1.resize(hint_1.size() + out_rows, 0);
 
+  // 验证 combined_hint_1 的大小
+  size_t expected_combined_size = out_rows * (params_.PolyLen() + 1);
+  SPDLOG_INFO(
+      "Offline: hint_1.size()={}, out_rows={}, combined_hint_1.size()={}, "
+      "expected={}",
+      hint_1.size(), out_rows, combined_hint_1.size(), expected_combined_size);
+  YACL_ENFORCE(combined_hint_1.size() == expected_combined_size,
+               "combined_hint_1 size mismatch: {} != {}",
+               combined_hint_1.size(), expected_combined_size);
+
   size_t rho = 1ULL << smaller_params.DbDim2();
+  SPDLOG_INFO("Offline: rho={}, smaller_params.DbDim2()={}", rho,
+              smaller_params.DbDim2());
 
   auto prepacked_lwe = PrepPackManyLwes(params_, combined_hint_1, rho);
 
@@ -573,10 +622,206 @@ OfflinePrecomputedValues YPirServer<T>::PerformOfflinePrecomputation() {
 }
 
 template <typename T>
+std::vector<uint32_t> YPirServer<T>::LweMultiplyBatchedWithDbPacked(
+    absl::Span<const uint32_t> aligned_query_packed) const {
+  size_t db_cols = GetDbCols();
+  size_t db_rows_padded = params_.DbRowsPadded();
+
+  YACL_ENFORCE(aligned_query_packed.size() == db_rows_padded,
+               "Query size mismatch: expected {}, got {}", db_rows_padded,
+               aligned_query_packed.size());
+
+  std::vector<uint32_t> result((db_cols + 8), 0);
+  size_t a_rows = db_cols;
+  size_t a_true_cols = db_rows_padded;
+
+  size_t a_cols = a_true_cols / 4;
+
+  size_t b_rows = a_true_cols;
+  size_t b_cols = 1;
+
+  MatMulVecPacked(result.data(), DbU32Data(), aligned_query_packed.data(),
+                  a_rows, a_cols, b_rows, b_cols);
+
+  auto transposed_result = TransposeGeneric(result, db_cols, 1);
+
+  return transposed_result;
+}
+
+template <typename T>
+std::vector<uint64_t> YPirServer<T>::MultiplyBatchedWithDbPacked(
+    absl::Span<const uint64_t> aligned_query_packed, size_t query_rows) const {
+  size_t db_rows_padded = params_.DbRowsPadded();
+  size_t db_cols = GetDbCols();
+
+  YACL_ENFORCE(query_rows == 1, "Query rows must be 1 for this implementation");
+  YACL_ENFORCE(db_rows_padded > 0, "Db rows cannot be 0");
+  YACL_ENFORCE(aligned_query_packed.size() % db_rows_padded == 0,
+               "Input query size alignment error");
+
+  size_t K = aligned_query_packed.size() / db_rows_padded;
+
+  std::vector<uint64_t> result(K * db_cols, 0);
+  FastBatchedDotProduct(params_, result.data(), aligned_query_packed.data(),
+                        db_rows_padded, Db(), db_rows_padded, db_cols);
+
+  return result;
+}
+
+template <typename T>
+std::vector<uint64_t> YPirServer<T>::AnswerQuery(
+    absl::Span<const uint64_t> aligned_query_packed) {
+  return MultiplyBatchedWithDbPacked(aligned_query_packed, 1);
+}
+
+template <typename T>
+std::vector<std::vector<uint8_t>> YPirServer<T>::PerformOnlineComputation(
+    OfflinePrecomputedValues& offline_vals,
+    const std::vector<uint32_t>& first_dim_queries_packed,
+    const std::vector<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>>&
+        second_dim_queries) {
+  auto params = params_;
+  auto lwe_params = LWEParams::Default();
+  size_t db_cols = GetDbCols();
+
+  uint64_t rlwe_q_prime_1 = params.GetQPrime1();
+  uint64_t rlwe_q_prime_2 = params.GetQPrime2();
+
+  size_t lwe_q_prime_bits = lwe_params.q2_bits;
+  uint64_t lwe_q_prime = lwe_params.GetQPrime2();
+
+  size_t pt_bits = static_cast<size_t>(
+      std::floor(std::log2(static_cast<double>(params.PtModulus()))));
+
+  double blowup_factor = static_cast<double>(lwe_q_prime_bits) / pt_bits;
+
+  size_t special_offs = static_cast<size_t>(std::ceil(
+      (static_cast<double>(lwe_params.n * lwe_q_prime_bits)) / pt_bits));
+
+  Params smaller_params = params;
+  smaller_params.SetDbDim1(params.DbDim2());
+  double num = blowup_factor * static_cast<double>(lwe_params.n + 1);
+  double denom = static_cast<double>(params.PolyLen());
+  size_t smaller_dim2 = static_cast<size_t>(std::ceil(std::log2(num / denom)));
+  smaller_params.SetDbDim2(smaller_dim2);
+
+  size_t out_rows = 1ULL << (smaller_params.DbDim2() + params.PolyLenLog2());
+  size_t rho = 1ULL << smaller_params.DbDim2();
+  SPDLOG_INFO("Online: out_rows={}, rho={}, blowup_factor={}, special_offs={}",
+              out_rows, rho, blowup_factor, special_offs);
+
+  auto& hint_1_combined = offline_vals.hint_1;
+  const auto& pseudorandom_query_1 = offline_vals.pseudorandom_query_1;
+
+  const auto& y_constants = offline_vals.y_constants;
+  auto& smaller_server = *(offline_vals.smaller_server);
+  const auto& prepacked_lwe = offline_vals.prepacked_lwe;
+  const auto& fake_pack_pub_params = offline_vals.fake_pack_pub_params;
+  const auto& precomp = offline_vals.precomp;
+  // Begin online computation
+
+  auto intermediate = LweMultiplyBatchedWithDbPacked(first_dim_queries_packed);
+
+  std::vector<std::vector<uint8_t>> responses;
+  responses.reserve(second_dim_queries.size());
+
+  size_t num_chunks = second_dim_queries.size();
+
+  for (size_t i = 0; i < num_chunks; ++i) {
+    const auto& packed_query_col = second_dim_queries[i].first;
+    const auto& pack_pub_params_row_1s = second_dim_queries[i].second;
+
+    std::vector<uint64_t> intermediate_cts_rescaled;
+    intermediate_cts_rescaled.reserve(db_cols);
+    size_t chunk_offset = i * db_cols;
+    for (size_t j = 0; j < db_cols; ++j) {
+      intermediate_cts_rescaled.push_back(
+          arith::Rescale(static_cast<uint64_t>(intermediate[chunk_offset + j]),
+                         lwe_params.modulus, lwe_q_prime));
+    }
+
+    {
+      uint16_t* smaller_db_mut = smaller_server.DbMut();
+
+      for (size_t j = 0; j < db_cols; ++j) {
+        uint64_t val = intermediate_cts_rescaled[j];
+        size_t blowup_ceil = static_cast<size_t>(std::ceil(blowup_factor));
+        for (size_t m = 0; m < blowup_ceil; ++m) {
+          size_t out_idx = (special_offs + m) * db_cols + j;
+          uint16_t val_part = static_cast<uint16_t>((val >> (m * pt_bits)) &
+                                                    ((1ULL << pt_bits) - 1));
+          smaller_db_mut[out_idx] = val_part;
+        }
+      }
+    }
+
+    size_t blowup_factor_ceil = static_cast<size_t>(std::ceil(blowup_factor));
+    auto secondary_hint = smaller_server.MultiplyWithDbRing(
+        pseudorandom_query_1, special_offs, special_offs + blowup_factor_ceil,
+        SEED_1);
+
+    for (size_t r = 0; r < params.PolyLen(); ++r) {
+      for (size_t j = 0; j < blowup_factor_ceil; ++j) {
+        size_t inp_idx = r * blowup_factor_ceil + j;
+        size_t out_idx = r * out_rows + special_offs + j;
+        hint_1_combined[out_idx] = secondary_hint[inp_idx];
+      }
+    }
+    auto response = smaller_server.AnswerQuery(packed_query_col);
+
+    std::vector<PolyMatrixNtt> excess_cts;
+    excess_cts.reserve(blowup_factor_ceil);
+
+    for (size_t j = special_offs; j < special_offs + blowup_factor_ceil; ++j) {
+      auto rlwe_ct = PolyMatrixRaw::Zero(params.PolyLen(), 2, 1);
+      std::vector<uint64_t> poly;
+      poly.reserve(params.PolyLen());
+      for (size_t k = 0; k < params.PolyLen(); ++k) {
+        poly.push_back(hint_1_combined[k * out_rows + j]);
+      }
+
+      auto nega = NegacyclicPerm(poly, 0, params.Modulus());
+      std::copy(nega.begin(), nega.end(), rlwe_ct.Poly(0, 0).begin());
+      excess_cts.push_back(ToNtt(params, rlwe_ct));
+    }
+
+    auto pack_pub_params_row_1s_pms =
+        UnpackVecPm(params, 1, params.TExpLeft(), pack_pub_params_row_1s);
+
+    auto packed = PackManyLwes(params, prepacked_lwe, precomp, response, rho,
+                               pack_pub_params_row_1s_pms, y_constants);
+
+    auto pack_pub_params = fake_pack_pub_params;
+
+    for (size_t k = 0; k < pack_pub_params.size(); ++k) {
+      auto uncondensed =
+          UncondenseMatrix(params, pack_pub_params_row_1s_pms[k]);
+      pack_pub_params[k].CopyInto(uncondensed, 1, 0);
+    }
+
+    auto other_packed = PackUsingSingleWithOffset(params, pack_pub_params,
+                                                  excess_cts, special_offs);
+
+    AddInto(params, packed[0], other_packed);
+
+    std::vector<uint8_t> concated_bytes;
+    for (const auto& ct : packed) {
+      auto res = FromNtt(params, ct);
+      std::vector<uint8_t> res_switched =
+          ModulusSwitch(params, res, rlwe_q_prime_1, rlwe_q_prime_2);
+      concated_bytes.insert(concated_bytes.end(), res_switched.begin(),
+                            res_switched.end());
+    }
+    responses.push_back(std::move(concated_bytes));
+  }
+  return responses;
+}
+
+template <typename T>
 OfflinePrecomputedValues YPirServer<T>::PerformOfflinePrecomputationSimplepir(
     absl::Span<const uint64_t> hint_0_load, std::string_view hint_0_store) {
   if (!is_simplepir_) {
-    throw std::runtime_error(
+    YACL_THROW(
         "PerformOfflinePrecomputationSimplepir called but is_simplepir is "
         "false");
   }
@@ -627,6 +872,7 @@ OfflinePrecomputedValues YPirServer<T>::PerformOfflinePrecomputationSimplepir(
   result.hint_1 = {};
   result.pseudorandom_query_1 = {};
   result.y_constants = std::move(y_constants);
+  // result.smaller_server = nullptr;
   result.prepacked_lwe = std::move(prepacked_lwe);
   result.fake_pack_pub_params = std::move(fake_pack_pub_params);
   result.precomp = std::move(precomp);
@@ -661,7 +907,7 @@ std::vector<uint8_t> YPirServer<T>::PerformOnlineComputationSimplepir(
   std::vector<uint64_t> intermediate(db_cols, 0);
 
   FastBatchedDotProduct(params_, intermediate.data(),
-                        first_dim_queries_packed.data(), db_rows, db(), db_rows,
+                        first_dim_queries_packed.data(), db_rows, Db(), db_rows,
                         db_cols);
 
   size_t num_rlwe_outputs = db_cols / params_.PolyLen();

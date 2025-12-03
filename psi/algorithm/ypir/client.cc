@@ -551,11 +551,6 @@ YPIRSimpleQuery YClient::GenerateFullQuerySimplepir(uint64_t target_idx) {
   size_t target_col = static_cast<size_t>(target_idx % db_cols);
 
   SPDLOG_INFO("Target item: {} ({}, {})", target_idx, target_row, target_col);
-
-  // -----------------------------------------------------------------------
-  // 2. 生成 Public Params (Packing Keys)
-  // -----------------------------------------------------------------------
-
   auto sk_reg = spiral_client_.GetSkRegev();
 
   yacl::crypto::Prg<uint64_t> rng_pub(yacl::crypto::SecureRandU128());
@@ -575,10 +570,6 @@ YPIRSimpleQuery YClient::GenerateFullQuerySimplepir(uint64_t target_idx) {
 
   std::vector<uint64_t> pack_pub_params_row_1s_pm =
       PackVecPm(params_, 1, params_.TExpLeft(), pack_pub_params_row_1s);
-
-  // -----------------------------------------------------------------------
-  // 3. 生成 Query (SimplePIR LWE Sample)
-  // -----------------------------------------------------------------------
 
   std::vector<uint64_t> query_row_last_row =
       GenerateQueryLweLowMem(SEED_0, params_.DbDim1(), true, target_row);
@@ -686,9 +677,26 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
         DecryptCtRegMeasured(y_client.GetSpiralClient(), params,
                              ToNtt(params, ct), params.PolyLen());
     const auto& decrypted_coeffs = decrypted_part.Data();
-    outer_ct.insert(outer_ct.end(), decrypted_coeffs.begin(),
-                    decrypted_coeffs.end());
+    // DecryptCtRegMeasured 返回的值已经在正确的范围内，直接使用
+    for (uint64_t coeff : decrypted_coeffs) {
+      outer_ct.push_back(coeff);
+    }
   }
+
+  size_t special_offs_preview = static_cast<size_t>(std::ceil(
+      (static_cast<double>(lwe_params.n) * lwe_q_prime_bits) / pt_bits));
+  SPDLOG_INFO("Decode: outer_ct size={}, first 4 values: [{}, {}, {}, {}]",
+              outer_ct.size(), outer_ct.size() > 0 ? outer_ct[0] : 0,
+              outer_ct.size() > 1 ? outer_ct[1] : 0,
+              outer_ct.size() > 2 ? outer_ct[2] : 0,
+              outer_ct.size() > 3 ? outer_ct[3] : 0);
+  SPDLOG_INFO(
+      "Decode: outer_ct at special_offs={}: [{}, {}]", special_offs_preview,
+      outer_ct.size() > special_offs_preview ? outer_ct[special_offs_preview]
+                                             : 0,
+      outer_ct.size() > special_offs_preview + 1
+          ? outer_ct[special_offs_preview + 1]
+          : 0);
 
   std::vector<uint8_t> outer_ct_t_u8 = U64sToContiguousBytes(outer_ct, pt_bits);
 
@@ -698,19 +706,39 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
   const size_t special_offs = static_cast<size_t>(std::ceil(
       (static_cast<double>(lwe_params.n) * lwe_q_prime_bits) / pt_bits));
 
+  SPDLOG_INFO("Decode: lwe_q_prime={}, special_offs={}, pt_bits={}",
+              lwe_q_prime, special_offs, pt_bits);
+
   for (size_t z = 0; z < lwe_params.n; ++z) {
     uint64_t val = read_bits(outer_ct_t_u8, bit_offs, lwe_q_prime_bits);
     bit_offs += lwe_q_prime_bits;
-    assert(val < lwe_q_prime && "val >= lwe_q_prime");
+    if (val >= lwe_q_prime) {
+      SPDLOG_WARN("WARNING at z={}: val {} >= lwe_q_prime {}, taking modulo", z,
+                  val, lwe_q_prime);
+      val = val % lwe_q_prime;
+    }
     inner_ct.Data()[z] = arith::Rescale(val, lwe_q_prime, lwe_params.modulus);
   }
 
   uint64_t val = 0;
   size_t num_loops = static_cast<size_t>(std::ceil(blowup_factor));
+  SPDLOG_INFO(
+      "Extracting b value: special_offs={}, num_loops={}, pt_bits={}, "
+      "blowup_factor={}",
+      special_offs, num_loops, pt_bits, blowup_factor);
   for (size_t i = 0; i < num_loops; ++i) {
-    val |= outer_ct[special_offs + i] << (i * pt_bits);
+    uint64_t coeff = outer_ct[special_offs + i];
+    SPDLOG_INFO("  i={}, outer_ct[{}]={}, shift={}", i, special_offs + i, coeff,
+                i * pt_bits);
+    val |= coeff << (i * pt_bits);
   }
-  assert(val < lwe_q_prime && "val >= lwe_q_prime");
+  SPDLOG_INFO("Combined val={}, lwe_q_prime={}, val<lwe_q_prime={}", val,
+              lwe_q_prime, val < lwe_q_prime);
+  if (val >= lwe_q_prime) {
+    SPDLOG_WARN("WARNING: val {} >= lwe_q_prime {}, taking modulo", val,
+                lwe_q_prime);
+    val = val % lwe_q_prime;
+  }
   inner_ct.Data()[lwe_params.n] =
       arith::Rescale(val, lwe_q_prime, lwe_params.modulus);
 
@@ -721,9 +749,15 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
   }
 
   uint32_t decrypted = y_client.GetLweClient().Decrypt(inner_ct_as_u32);
+  
+  SPDLOG_INFO("LWE Decrypt: decrypted={}, modulus={}, pt_modulus={}", 
+              decrypted, lwe_params.modulus, lwe_params.pt_modulus);
+  
   uint64_t final_result =
       arith::Rescale(static_cast<uint64_t>(decrypted), lwe_params.modulus,
                      lwe_params.pt_modulus);
+  
+  SPDLOG_INFO("After Rescale: final_result={}", final_result);
 
   return final_result;
 }

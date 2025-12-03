@@ -23,7 +23,6 @@
 namespace psi::spiral::arith {
 
 void NttForward(const Params& params, absl::Span<uint64_t> operand_overall);
-void NttForwardNew(const Params& params, absl::Span<uint64_t> operand_overall);
 
 void NttInverse(const Params& params, absl::Span<uint64_t> operand_overall);
 

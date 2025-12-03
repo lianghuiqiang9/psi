@@ -19,7 +19,15 @@ class YPirServer {
              bool is_simplepir, bool inp_transposed, bool pad_rows_in);
 
   size_t GetDbCols() const;
-  const T* db() const;
+  const T* Db() const;
+  T* DbMut();
+  const Params& GetParams() const { return params_; }
+
+  const uint32_t* DbU32Data() const {
+    return reinterpret_cast<const uint32_t*>(db_buf_.data());
+  }
+  size_t DbU32Size() const { return db_buf_.size() * 2; }
+
   std::vector<uint64_t> GenerateHint0Ring() const;
   void WriteVecU64ToFile(std::string_view path,
                          const std::vector<uint64_t>& data) const;
@@ -28,7 +36,12 @@ class YPirServer {
   std::vector<uint64_t> MultiplyWithDbRing(
       const std::vector<PolyMatrixNtt>& preprocessed_query, size_t col_start,
       size_t col_end, uint8_t seed_idx) const;
-
+  std::vector<uint64_t> MultiplyBatchedWithDbPacked(
+      absl::Span<const uint64_t> aligned_query_packed, size_t query_rows) const;
+  std::vector<uint32_t> LweMultiplyBatchedWithDbPacked(
+      absl::Span<const uint32_t> aligned_query_packed) const;
+  std::vector<uint64_t> AnswerQuery(
+      absl::Span<const uint64_t> aligned_query_packed);
   std::vector<uint64_t> AnswerHintRing(uint8_t public_seed_idx,
                                        size_t cols) const;
 
@@ -51,10 +64,11 @@ class YPirServer {
 
  private:
   const Params params_;
-  Params smaller_params_;
+  // Params smaller_params_;
   std::vector<uint64_t> db_buf_;
   bool pad_rows_;
   bool is_simplepir_;
+  bool inp_transposed_;  // 数据库是否为转置存储 (row-major)
 };
 
 }  // namespace psi::ypir

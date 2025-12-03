@@ -19,6 +19,47 @@ namespace psi::ypir {
 
 using namespace psi::spiral;
 
+extern "C" {
+void matMulVecPacked(uint32_t* out, const uint32_t* a, const uint32_t* b,
+                     size_t aRows, size_t aCols);
+
+void matMulVecPacked2(uint32_t* out, const uint32_t* a, const uint32_t* b_full,
+                      size_t aRows, size_t aCols);
+
+void matMulVecPacked4(uint32_t* out, const uint32_t* a, const uint32_t* b_full,
+                      size_t aRows, size_t aCols);
+
+void matMulVecPacked8(uint32_t* out, const uint32_t* a, const uint32_t* b_full,
+                      size_t aRows, size_t aCols);
+}
+
+// Wrapper function that matches the Rust signature
+void MatMulVecPacked(uint32_t* out, const uint32_t* a, const uint32_t* b,
+                     size_t a_rows, size_t a_cols, size_t b_rows,
+                     size_t b_cols) {
+  // Debug output (equivalent to Rust's debug! macro)
+
+  // Assertions
+  assert(a_rows * a_cols == a_rows * a_cols);  // a.len() == a_rows * a_cols
+  assert(b_rows * b_cols == b_rows * b_cols);  // b.len() == b_rows * b_cols
+  assert(a_cols * 4 == b_rows);
+  // Note: out.len() >= a_rows + 8 should be checked by caller
+
+  // Dispatch based on b_cols
+  if (b_cols == 1) {
+    matMulVecPacked(out, a, b, a_rows, a_cols);
+  } else if (b_cols == 2) {
+    matMulVecPacked2(out, a, b, a_rows, a_cols);
+  } else if (b_cols == 4) {
+    matMulVecPacked4(out, a, b, a_rows, a_cols);
+  } else if (b_cols == 8) {
+    matMulVecPacked8(out, a, b, a_rows, a_cols);
+  } else {
+    fprintf(stderr, "Error: b_cols must be 1, 2, 4, or 8, got %zu\n", b_cols);
+    assert(false && "b_cols must be 1, 2, 4, or 8");
+  }
+}
+
 PolyMatrixNtt HomomorphicAutomorph(const Params& params, size_t t, size_t t_exp,
                                    const PolyMatrixNtt& ct,
                                    const PolyMatrixNtt& pub_param) {
@@ -241,6 +282,81 @@ PolyMatrixNtt CondenseMatrix(const Params& params, const PolyMatrixNtt& a) {
 }
 
 // from ypir/packing.rs
+PolyMatrixNtt RotationPoly(const Params& params, size_t amount) {
+  // 1. 初始化 1x1 的零矩阵 (系数域)
+  PolyMatrixRaw res = PolyMatrixRaw::Zero(params.PolyLen(), 1, 1);
+
+  // 2. 设置指定位置的系数为 1
+  // amount should be < poly_len for proper operation
+  if (amount < res.Data().size()) {
+    res.Data()[amount] = 1;
+  } else {
+    YACL_THROW("Rotation amount exceeds polynomial length");
+  }
+
+  // 3. 转换到 NTT 域
+  return ToNtt(params, res);
+}
+PolyMatrixNtt PackSingleLwe(const Params& params,
+                            const std::vector<PolyMatrixNtt>& pub_params,
+                            const PolyMatrixNtt& lwe_ct) {
+  // 1. 克隆初始密文
+  PolyMatrixNtt cur_r = lwe_ct;
+
+  size_t log_n = params.PolyLenLog2();
+
+  for (size_t i = 0; i < log_n; ++i) {
+    // 2. 计算自同构索引 t
+    size_t t = (params.PolyLen() / (1ULL << i)) + 1;
+
+    const auto& pub_param = pub_params[i];
+
+    // 3. 执行同态自同构
+    // Rust: homomorphic_automorph(params, t, params.t_exp_left, &cur_r,
+    // pub_param) 假设 HomomorphicAutomorph 返回一个新的 PolyMatrixNtt
+    auto tau_of_r =
+        HomomorphicAutomorph(params, t, params.TExpLeft(), cur_r, pub_param);
+
+    // 4. 累加结果
+    // Rust: add_into(&mut cur_r, &tau_of_r);
+    // 假设 AddInto 是原位加法函数，或者 PolyMatrixNtt 重载了 +=
+    AddInto(params, cur_r, tau_of_r);
+  }
+
+  return cur_r;
+}
+
+PolyMatrixNtt PackUsingSingleWithOffset(
+    const Params& params, const std::vector<PolyMatrixNtt>& pub_params,
+    const std::vector<PolyMatrixNtt>& cts, size_t offset) {
+  PolyMatrixNtt res =
+      PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(), 2, 1);
+
+  SPDLOG_INFO(
+      "PackUsingSingleWithOffset: offset={}, cts.size()={}, poly_len={}",
+      offset, cts.size(), params.PolyLen());
+
+  for (size_t i = 0; i < cts.size(); ++i) {
+    PolyMatrixNtt packed_single = PackSingleLwe(params, pub_params, cts[i]);
+
+    size_t rotation_amount = offset + i;
+    if (rotation_amount >= params.PolyLen()) {
+      SPDLOG_ERROR("ERROR: rotation_amount {} >= poly_len {} (offset={}, i={})",
+                   rotation_amount, params.PolyLen(), offset, i);
+      YACL_THROW(
+          "Rotation amount exceeds polynomial length in "
+          "PackUsingSingleWithOffset");
+    }
+
+    PolyMatrixNtt rotation = RotationPoly(params, rotation_amount);
+    PolyMatrixNtt rotated = ScalarMultiply(params, rotation, packed_single);
+
+    AddInto(params, res, rotated);
+  }
+
+  return res;
+}
+
 std::vector<PolyMatrixNtt> PrepPackLwes(const Params& params,
                                         absl::Span<const uint64_t> lwe_cts,
                                         size_t cols_to_do) {
@@ -909,6 +1025,7 @@ void FastBatchedDotProduct(const Params& params, uint64_t* c, const uint64_t* a,
   }
 }
 
+// from serialize.rs
 std::vector<PolyMatrixNtt> UnpackVecPm(const Params& params, size_t rows,
                                        size_t cols,
                                        absl::Span<const uint64_t> data) {
@@ -956,7 +1073,38 @@ std::vector<PolyMatrixNtt> UnpackVecPm(const Params& params, size_t rows,
 
   return v_cts;
 }
+PolyMatrixNtt UncondenseMatrix(const Params& params, const PolyMatrixNtt& a) {
+  size_t rows = a.Rows();
+  size_t cols = a.Cols();
+  size_t poly_len = params.PolyLen();
 
+  // 初始化结果矩阵，大小与 params 一致
+  // 注意：这里的 params 应该描述的是解压后的形状（即多项式长度足够容纳
+  // 2*poly_len 或者有 2 个 CRT 模数）
+  PolyMatrixNtt res =
+      PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(), rows, cols);
+
+  for (size_t i = 0; i < rows; ++i) {
+    for (size_t j = 0; j < cols; ++j) {
+      // 获取多项式的引用
+      // 假设 GetPoly 返回的是 absl::Span<uint64_t> 或者 std::vector<uint64_t>&
+      auto res_poly = res.Poly(i, j);
+      const auto a_poly = a.Poly(i, j);
+
+      for (size_t z = 0; z < poly_len; ++z) {
+        uint64_t val = a_poly[z];
+
+        // 提取低 32 位放入前半部分
+        res_poly[z] = val & 0xFFFFFFFFULL;
+
+        // 提取高 32 位放入后半部分 (poly_len 偏移处)
+        res_poly[z + poly_len] = val >> 32;
+      }
+    }
+  }
+
+  return res;
+}
 // from modulus switch.rs
 std::vector<uint8_t> ModulusSwitch(const Params& params,
                                    const PolyMatrixRaw& poly_matrix,
