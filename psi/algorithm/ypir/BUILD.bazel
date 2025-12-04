@@ -32,7 +32,7 @@ psi_cc_library(
     srcs = ["client.cc"],
     hdrs = ["client.h"],
     deps = [
-        "params",
+        ":params",
         ":util",
         "//psi/algorithm/spiral:discrete_gaussian",
         "//psi/algorithm/spiral:gadget",
@@ -191,5 +191,36 @@ psi_cc_test(
     deps = [
         "//psi/algorithm/spiral:params",
         "//psi/algorithm/spiral:poly_matrix_utils",
+    ],
+)
+
+psi_cc_test(
+    name = "lwe_consistency_test",
+    srcs = ["lwe_consistency_test.cc"],
+    deps = [
+        ":client",
+        ":convolution",
+        ":server",
+        "//psi/algorithm/spiral:params",
+        "//psi/algorithm/spiral:spiral_client",
+    ],
+)
+
+psi_cc_test(
+    name = "verify_hint_computation_test",
+    srcs = ["verify_hint_computation_test.cc"],
+    deps = [
+        ":client",
+        ":convolution",
+        ":params",
+    ],
+)
+
+psi_cc_test(
+    name = "lwe_flow_test",
+    srcs = ["lwe_flow_test.cc"],
+    deps = [
+        ":client",
+        ":params",
     ],
 )

@@ -60,7 +60,10 @@ struct SpiralQuery {
 
 class SpiralClient : public psi::pir::IndexPirClient {
  public:
-  explicit SpiralClient(Params params) : params_(std::move(params)) { Init(); }
+  explicit SpiralClient(Params params) : params_(std::move(params)) {
+    Init();
+    GenSecretKeys();  // Use random seed
+  }
   explicit SpiralClient(Params params, uint128_t seed)
       : params_(std::move(params)) {
     Init();
@@ -79,6 +82,7 @@ class SpiralClient : public psi::pir::IndexPirClient {
         params_.MaxByteLenOfPt();
 
     element_size_of_pt_ = params_.ElementSizeOfPt(element_byte_len);
+    GenSecretKeys();  // Use random seed
   }
 
   PublicKeys GenPublicKeys() const;

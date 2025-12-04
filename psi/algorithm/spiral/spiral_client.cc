@@ -116,8 +116,8 @@ void SpiralClient::Init() {
       PolyMatrixRaw::Zero(params_.PolyLen(), sk_regev_rows, sk_regev_cols);
 
   dg_ = DiscreteGaussian(params_.NoiseWidth());
-  // Gen secret key for SpiralClient
-  GenSecretKeys();
+  // Note: Secret keys are NOT generated here anymore.
+  // Constructors must call GenSecretKeys() explicitly.
 }
 
 PolyMatrixRaw SpiralClient::GetFreshGswPublicKey(
@@ -265,9 +265,9 @@ PublicKeys SpiralClient::GenPublicKeys() const {
   auto sk_gsw_ntt = ToNtt(params_, sk_gsw_);
 
   PublicKeys pp;
-  uint128_t seed = yacl::crypto::SecureRandU128();
+  uint128_t seed = yacl::MakeUint128(0, 10001);
   yacl::crypto::Prg<uint64_t> rng(seed);
-  uint128_t pub_seed = yacl::crypto::SecureRandU128();
+  uint128_t pub_seed = yacl::MakeUint128(0, 10002);
   yacl::crypto::Prg<uint64_t> rng_pub(pub_seed);
 
   // params for packing
@@ -334,12 +334,10 @@ SpiralQuery SpiralClient::GenQueryInternal(size_t pt_idx_target) const {
   uint64_t modulus_cr0 = params_.BarrettCr0Modulus();
   uint64_t modulus_cr1 = params_.BarrettCr1Modulus();
 
-  yacl::crypto::Prg<uint64_t> rng(yacl::crypto::SecureRandU128());
+  yacl::crypto::Prg<uint64_t> rng(yacl::MakeUint128(0, 10003));
   // a empty query
   SpiralQuery query;
-  uint128_t query_seed;
-  rng.Fill(absl::MakeSpan(reinterpret_cast<uint8_t*>(&query_seed),
-                          sizeof(query_seed)));
+  uint128_t query_seed = yacl::MakeUint128(0, 10004);
   yacl::crypto::Prg<uint64_t> rng_pub(query_seed);
   query.seed_ = query_seed;
 

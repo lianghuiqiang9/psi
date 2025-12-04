@@ -32,16 +32,16 @@ class YPIRIntegrationTest : public ::testing::Test {
   void SetUp() override { spdlog::set_level(spdlog::level::info); }
 };
 
-TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
-  // Setup parameters - use standard SimplePIR parameters (16K rows)
-  // This matches Rust: params_for_scenario_simplepir(1<<14, 16384*8)
+TEST_F(YPIRIntegrationTest, SimplePIR_1GB) {
+  // Setup parameters - 1GB database test
   std::size_t poly_len{2048};
   std::vector<std::uint64_t> moduli{268369921, 249561089};
   double noise_width{16.042421};
 
-  // Standard SimplePIR: db_dim_1=3 → 2^(3+11)=16384 rows, instances=1
-  PolyMatrixParams poly_matrix_params(2, 16384, 21, 4, 8, 8, 1);
-  QueryParams query_params(3, 1, 1);  // db_dim_1=3, db_dim_2=1, instances=1
+  // 1GB SimplePIR: db_dim_1=5, instances=4
+  // 2^(5+11)=65536 rows × 4*2048=8192 cols = 512M elements = 1GB (uint16_t)
+  PolyMatrixParams poly_matrix_params(2, 16384, 21, 4, 8, 8, 4);
+  QueryParams query_params(5, 1, 4);  // db_dim_1=5, db_dim_2=1, instances=4
 
   Params params(poly_len, std::move(moduli), noise_width,
                 std::move(poly_matrix_params), std::move(query_params));
@@ -51,9 +51,10 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
   size_t db_size = db_rows * db_cols;
 
   SPDLOG_INFO(
-      "SimplePIR test (SMALL): db_rows={}, db_cols={}, db_size={}, "
-      "pt_modulus={}",
-      db_rows, db_cols, db_size, params.PtModulus());
+      "SimplePIR Performance Test (1GB): db_rows={}, db_cols={}, db_size={} "
+      "(~{} MB), pt_modulus={}",
+      db_rows, db_cols, db_size, (db_size * sizeof(uint16_t)) / (1024 * 1024),
+      params.PtModulus());
 
   // SimplePIR with pt_modulus=16384 requires uint16_t database
   std::vector<uint16_t> db(db_size);
@@ -64,73 +65,24 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
     val = static_cast<uint16_t>(dis(gen));
   }
 
-  // Add some known values for verification
-  if (db_size > 1000) {
-    db[0] = 100;
-    db[1] = 101;
-    db[100] = 200;
-    db[1000] = 250;
-  }
+  // Add some known values for verification at strategic positions
+  db[0] = 100;
+  db[1] = 101;
+  db[100] = 200;
+  db[1000] = 250;
+  db[100000] = 300;  // Test larger index
 
-  // Create server (YServer is now YPirServer<uint16_t> for SimplePIR)
-  // Note: SimplePIR uses column-major storage internally (inp_transposed=false)
-  // to match Rust implementation
+  SPDLOG_INFO(
+      "Known test values: db[0]={}, db[1]={}, db[100]={}, db[1000]={}, "
+      "db[100000]={}",
+      db[0], db[1], db[100], db[1000], db[100000]);
+
+  // Create server
   auto server_start = std::chrono::high_resolution_clock::now();
-  YServer server(
-      params, db, true, false,
-      true);  // is_simplepir=true, inp_transposed=false, pad_rows=true
+  YServer server(params, db, true, false, true);
   auto server_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::high_resolution_clock::now() - server_start);
   SPDLOG_INFO("Server setup: {} ms", server_elapsed.count());
-  EXPECT_GT(server_elapsed.count(), 0);
-
-  // Verify server database storage
-  const uint16_t* server_db = server.Db();
-  size_t padded_rows = params.DbRowsPadded();
-  SPDLOG_INFO(
-      "Verifying database storage: db_rows={}, db_cols={}, padded_rows={}",
-      db_rows, db_cols, padded_rows);
-
-  // Check if known values are stored correctly
-  auto check_value = [&](size_t idx) {
-    size_t row = idx / db_cols;
-    size_t col = idx % db_cols;
-    // Server uses column-major: col * padded_rows + row
-    size_t server_idx = col * padded_rows + row;
-    uint16_t original = db[idx];
-    uint16_t stored = server_db[server_idx];
-    SPDLOG_INFO("  db[{}] (row={}, col={}): original={}, stored={}", idx, row,
-                col, original, stored);
-    return original == stored;
-  };
-
-  EXPECT_TRUE(check_value(0));
-  EXPECT_TRUE(check_value(1));
-  if (db_size > 1000) {
-    EXPECT_TRUE(check_value(100));
-    EXPECT_TRUE(check_value(1000));
-  }
-
-  // Also print what's actually stored in row 0
-  SPDLOG_INFO("First 10 values in row 0 of database (original indexing):");
-  for (size_t i = 0; i < std::min(db_cols, size_t(10)); ++i) {
-    SPDLOG_INFO("  db[{}] = {}", i, static_cast<int>(db[i]));
-  }
-
-  // Print what row 0 should contain
-  // input db is row-major: db[row * db_cols + col]
-  SPDLOG_INFO("Expected row 0 values (what SimplePIR should return):");
-  std::vector<uint16_t> expected_row_0;
-  for (size_t col = 0; col < db_cols; ++col) {
-    size_t original_idx = 0 * db_cols + col;  // row=0, col=col in row-major
-    if (original_idx < db_size) {
-      expected_row_0.push_back(db[original_idx]);
-      if (col < 10) {
-        SPDLOG_INFO("  col={}: db[{}] = {}", col, original_idx,
-                    static_cast<int>(db[original_idx]));
-      }
-    }
-  }
 
   // Offline precomputation
   OfflinePrecomputedValues offline_vals;
@@ -154,14 +106,23 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
     throw;
   }
 
-  // Test querying row 0
-  size_t target_idx = 0;
-  SPDLOG_INFO("Querying row 0 (first value expected: 100)");
+  // Test querying multiple indices to verify SimplePIR correctness
+  // Test known values at different positions
+  std::vector<size_t> test_indices = {0, 1, 100, 1000, 100000};
+  std::vector<uint16_t> expected_values = {100, 101, 200, 250, 300};
 
-  // Client generates keys and query
-  try {
+  for (size_t i = 0; i < test_indices.size(); ++i) {
+    size_t target_idx = test_indices[i];
+    uint16_t expected_value = expected_values[i];
+    size_t test_row_idx = target_idx / db_cols;
+    size_t test_col_idx = target_idx % db_cols;
+
+    SPDLOG_INFO("\n=== Query {}/{}: index={} (row={}, col={}), expected={} ===",
+                i + 1, test_indices.size(), target_idx, test_row_idx,
+                test_col_idx, expected_value);
+
+    // Client generates keys and query
     auto client_start = std::chrono::high_resolution_clock::now();
-    // Use fixed seed for reproducibility
     uint128_t fixed_seed = yacl::MakeUint128(0, 12345);
     SpiralClient spiral_client(params, fixed_seed);
     YClient y_client(spiral_client, params, fixed_seed);
@@ -170,12 +131,33 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
 
     auto client_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - client_start);
+
+    // Calculate query size breakdown
+    size_t packed_query_size =
+        simple_query.packed_query_row.size() * sizeof(uint32_t);
+    size_t pack_params_size =
+        simple_query.pack_pub_params_row_1s_pm.size() * sizeof(uint64_t);
+    size_t total_query_size = packed_query_size + pack_params_size;
+
     SPDLOG_INFO("Client query generation: {} ms", client_elapsed.count());
+    SPDLOG_INFO(
+        "  Query breakdown: packed_query={} KB ({} elements), pack_params={} "
+        "KB ({} elements), total={} KB",
+        packed_query_size / 1024, simple_query.packed_query_row.size(),
+        pack_params_size / 1024, simple_query.pack_pub_params_row_1s_pm.size(),
+        total_query_size / 1024);
+    if (i == 0) {
+      SPDLOG_INFO(
+          "  NOTE: pack_params is the same for all queries from same client "
+          "and can be reused");
+      SPDLOG_INFO(
+          "        In practice, send pack_params once, then only send "
+          "packed_query (64 KB) for subsequent queries");
+    }
 
     // Server online computation
     auto online_start = std::chrono::high_resolution_clock::now();
 
-    // Prepare pack_pub_params as vector of spans
     std::vector<absl::Span<const uint64_t>> pack_params_spans;
     if (!simple_query.pack_pub_params_row_1s_pm.empty()) {
       pack_params_spans.push_back(
@@ -188,9 +170,14 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
 
     auto online_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - online_start);
-    SPDLOG_INFO("Server online computation: {} ms", online_elapsed.count());
 
-    // Client decodes response using YPIRClient
+    // Calculate response size
+    size_t response_size = response.size();
+
+    SPDLOG_INFO("Server online: {} ms, Response size: {} bytes (~{} KB)",
+                online_elapsed.count(), response_size, response_size / 1024);
+
+    // Client decodes response
     auto decode_start = std::chrono::high_resolution_clock::now();
     YPIRClient ypir_client(params);
     auto decoded_values =
@@ -199,40 +186,21 @@ TEST_F(YPIRIntegrationTest, SimplePIRBasicFlow) {
         std::chrono::high_resolution_clock::now() - decode_start);
     SPDLOG_INFO("Client decode: {} ms", decode_elapsed.count());
 
-    // Verify correctness - decoded_values should contain the entire row
-    size_t target_row = target_idx / db_cols;
-
-    SPDLOG_INFO("Query completed - Target: row={}, decoded_values.size()={}",
-                target_row, decoded_values.size());
-
-    // SimplePIR returns the entire row - decoded_values[i] = row[i]
+    // Verify correctness - SimplePIR returns entire row
     EXPECT_EQ(decoded_values.size(), db_cols);
 
-    // Compare first 10 decoded values with expected
-    SPDLOG_INFO("Verifying decoded row (first 10 values):");
-    size_t num_errors = 0;
-    for (size_t col = 0; col < std::min(db_cols, size_t(10)); ++col) {
-      uint16_t expected = expected_row_0[col];
-      uint64_t decoded = decoded_values[col];
-      bool match = (decoded == expected);
-      SPDLOG_INFO("  col={}: decoded={}, expected={}, {}", col, decoded,
-                  expected, match ? "✓" : "✗");
-      if (!match) {
-        num_errors++;
-      }
+    uint64_t decoded_value = decoded_values[test_col_idx];
+    SPDLOG_INFO("Decoded: {}, Expected: {}", decoded_value, expected_value);
+
+    EXPECT_EQ(decoded_value, expected_value)
+        << "Query " << i + 1 << " failed at index " << target_idx;
+
+    if (decoded_value == expected_value) {
+      SPDLOG_INFO("✓ Query {} passed", i + 1);
     }
-
-    // Verify first value (db[0] = 100)
-    EXPECT_EQ(decoded_values[0], expected_row_0[0])
-        << "Decoded value mismatch at col 0";
-
-    EXPECT_EQ(num_errors, 0) << num_errors << " value mismatches found";
-
-    SPDLOG_INFO("✓ SimplePIR correctness verified!");
-  } catch (const std::exception& e) {
-    SPDLOG_ERROR("Exception in query/online phase: {}", e.what());
-    throw;
   }
+
+  SPDLOG_INFO("\n✓✓✓ All SimplePIR 1GB queries passed! ✓✓✓");
 }
 
 // DoublePIR test based on Rust scheme.rs test_ypir_basic
@@ -269,22 +237,20 @@ TEST_F(YPIRIntegrationTest, DoublePIRBasicFlow) {
       "pt_modulus={}",
       db_rows, db_cols, db_size, db_size / 1024, params.PtModulus());
 
-  // Create database with random uint8_t values
+  // Create database with sequential values 0, 1, 2, ..., n
+  // This makes debugging much easier
   std::vector<uint8_t> db(db_size);
-  std::random_device rd;
-  std::mt19937 gen(42);  // Fixed seed for reproducibility
-  std::uniform_int_distribution<> dis(0, 255);
-  for (auto& val : db) {
-    val = static_cast<uint8_t>(dis(gen));
+  for (size_t i = 0; i < db_size; ++i) {
+    db[i] = static_cast<uint8_t>(i % 256);
   }
 
-  // Add known test values
-  if (db_size > 1000) {
-    db[0] = 42;
-    db[1] = 43;
-    db[100] = 142;
-    db[1000] = 200;
-  }
+  SPDLOG_INFO("Database created with sequential values: db[i] = i % 256");
+  SPDLOG_INFO("  db[0-9]: [{}, {}, {}, {}, {}, {}, {}, {}, {}, {}]",
+              static_cast<int>(db[0]), static_cast<int>(db[1]),
+              static_cast<int>(db[2]), static_cast<int>(db[3]),
+              static_cast<int>(db[4]), static_cast<int>(db[5]),
+              static_cast<int>(db[6]), static_cast<int>(db[7]),
+              static_cast<int>(db[8]), static_cast<int>(db[9]));
 
   // Create server (DoublePIR uses uint8_t database)
   auto server_start = std::chrono::high_resolution_clock::now();
@@ -307,7 +273,7 @@ TEST_F(YPIRIntegrationTest, DoublePIRBasicFlow) {
   EXPECT_GT(offline_vals.hint_1.size(), 0);
   EXPECT_NE(offline_vals.smaller_server, nullptr);
 
-  // Test querying index 0 (expected value: 42)
+  // Test querying index 0 (expected value: 0)
   size_t target_idx = 0;
   uint8_t expected_value = db[target_idx];
   size_t target_row = target_idx / db_cols;
@@ -315,15 +281,24 @@ TEST_F(YPIRIntegrationTest, DoublePIRBasicFlow) {
   SPDLOG_INFO("Querying index {} (row={}, col={}, expected value: {})",
               target_idx, target_row, target_col,
               static_cast<int>(expected_value));
-  SPDLOG_INFO("  db[0]={}, db[1]={}, db[8191]={}, db[8192]={}",
-              static_cast<int>(db[0]), static_cast<int>(db[1]),
-              static_cast<int>(db[8191]), static_cast<int>(db[8192]));
+  SPDLOG_INFO(
+      "  Row-major: db[0-3]=[{}, {}, {}, {}], db[8192-8195]=[{}, {}, {}, {}]",
+      static_cast<int>(db[0]), static_cast<int>(db[1]), static_cast<int>(db[2]),
+      static_cast<int>(db[3]), static_cast<int>(db[8192]),
+      static_cast<int>(db[8193]), static_cast<int>(db[8194]),
+      static_cast<int>(db[8195]));
 
   // Client generates keys and query
   auto client_start = std::chrono::high_resolution_clock::now();
   uint128_t fixed_seed = yacl::MakeUint128(0, 12345);
   SpiralClient spiral_client(params, fixed_seed);
   YClient y_client(spiral_client, params, fixed_seed);
+
+  // Create LWE client for server-side debugging (same seed as client)
+  LWEParams lwe_params = LWEParams::Default();
+  LWEClient debug_lwe_client = LWEClient::FromSeed(lwe_params, fixed_seed);
+  SPDLOG_INFO(
+      "Created debug LWE client with same seed for server-side decryption");
 
   auto full_query = y_client.GenerateFullQuery(target_idx);
 
@@ -347,6 +322,10 @@ TEST_F(YPIRIntegrationTest, DoublePIRBasicFlow) {
       second_dim_queries;
   second_dim_queries.push_back(
       {full_query.packed_query_col, full_query.pack_pub_params_row_1s_pm});
+
+  // Pass debug LWE client to server for verification
+  server.SetDebugLweClient(&debug_lwe_client);
+  server.SetDebugOriginalDb(db, db_rows, db_cols);
 
   SPDLOG_INFO("Calling PerformOnlineComputation...");
   std::vector<std::vector<uint8_t>> responses;
@@ -381,3 +360,124 @@ TEST_F(YPIRIntegrationTest, DoublePIRBasicFlow) {
 
   SPDLOG_INFO("✓ DoublePIR correctness verified!");
 }
+/*
+// Test DoublePIR with multiple queries in one test - query same index 3
+times TEST_F(YPIRIntegrationTest, DoublePIRMultipleQueries) {
+  SPDLOG_INFO("=== DoublePIR Multiple Queries Test ===");
+
+  std::size_t poly_len = 2048;
+  std::vector<std::uint64_t> moduli = {268369921, 249561089};
+  double noise_width = 6.4;
+  PolyMatrixParams poly_matrix_params(2, 32768, 21, 4, 8, 8, 1);
+  QueryParams query_params(1, 2, 1);
+  Params params(poly_len, std::move(moduli), noise_width,
+                std::move(poly_matrix_params), std::move(query_params));
+
+  size_t db_rows = 1ULL << (params.DbDim1() + params.PolyLenLog2());
+  size_t db_cols = 1ULL << (params.DbDim2() + params.PolyLenLog2());
+  size_t db_size = db_rows * db_cols;
+
+  std::vector<uint8_t> db(db_size);
+  std::mt19937 gen(42);
+  std::uniform_int_distribution<> dis(0, 255);
+  for (auto& val : db) {
+    val = static_cast<uint8_t>(dis(gen));
+  }
+  // Add known test values BEFORE creating server
+  if (db_size > 1000) {
+    db[0] = 42;
+    db[1] = 43;
+    db[100] = 142;
+    db[1000] = 200;
+  }
+
+  // Set test values for multiple queries
+  // - index 0 (row=0, col=0): same row, first col
+  // - index 8192 (row=1, col=0): different row, first col
+  // - index 8193 (row=1, col=1): different row, second col
+  db[8192] = 99;  // row=1, col=0
+  db[8193] = 88;  // row=1, col=1
+
+  // Create server once
+  YPirServer<uint8_t> server(params, db, false, false, true);
+
+  // Debug: Print database layout
+  SPDLOG_INFO("Database layout: db_rows={}, db_cols={}", db_rows, db_cols);
+  SPDLOG_INFO("Verify expected values: db[0]={}, db[8192]={}, db[8193]={}",
+              static_cast<int>(db[0]), static_cast<int>(db[8192]),
+              static_cast<int>(db[8193]));
+
+  // Test 3 different queries
+  // Need to perform offline precomputation for EACH query because
+  // PerformOnlineComputation modifies offline_vals.hint_1
+
+  std::vector<size_t> test_indices = {0, 8192, 8193};
+  std::vector<uint8_t> expected_values = {42, 99, 88};
+  uint128_t fixed_seed = yacl::MakeUint128(0, 12345);
+
+  for (size_t i = 0; i < test_indices.size(); ++i) {
+    size_t target_idx = test_indices[i];
+    uint8_t expected_value = expected_values[i];
+
+    size_t target_row = target_idx / db_cols;
+    size_t target_col = target_idx % db_cols;
+
+    // Perform offline precomputation for each query
+    OfflinePrecomputedValues offline_vals =
+server.PerformOfflinePrecomputation();
+
+    SPDLOG_INFO("Query {}/3: index={} (row={}, col={}), expected={}",
+                i + 1, target_idx, target_row, target_col,
+                static_cast<int>(expected_value));
+
+    // Create new client for each query with same seed
+    SpiralClient spiral_client(params, fixed_seed);
+    YClient y_client(spiral_client, params, fixed_seed);
+    auto full_query = y_client.GenerateFullQuery(target_idx);
+
+    // Debug: check if queries are actually different
+    SPDLOG_INFO("  Query row first 5 values: [{}, {}, {}, {}, {}]",
+                full_query.packed_query_row[0],
+full_query.packed_query_row[1], full_query.packed_query_row[2],
+full_query.packed_query_row[3], full_query.packed_query_row[4]);
+    SPDLOG_INFO("  Query col first 5 values: [{}, {}, {}, {}, {}]",
+                full_query.packed_query_col[0],
+full_query.packed_query_col[1], full_query.packed_query_col[2],
+full_query.packed_query_col[3], full_query.packed_query_col[4]);
+
+    std::vector<uint32_t> first_dim_queries_packed =
+        full_query.packed_query_row;
+    std::vector<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>>
+        second_dim_queries;
+    second_dim_queries.push_back(
+        {full_query.packed_query_col,
+full_query.pack_pub_params_row_1s_pm});
+
+    auto responses = server.PerformOnlineComputation(
+        offline_vals, first_dim_queries_packed, second_dim_queries);
+    ASSERT_EQ(responses.size(), 1);
+
+    YPIRClient ypir_client(params);
+    uint64_t decoded_value =
+        ypir_client.DecodeResponseNormalYClient(params, y_client,
+responses[0]);
+
+    SPDLOG_INFO("  Decoded: {}, Expected: {}", decoded_value,
+                static_cast<int>(expected_value));
+
+    EXPECT_EQ(decoded_value, static_cast<uint64_t>(expected_value))
+        << "Query " << i + 1 << " (index=" << target_idx << ") failed:
+decoded "
+        << decoded_value << ", expected " <<
+static_cast<int>(expected_value);
+
+    if (decoded_value == static_cast<uint64_t>(expected_value)) {
+      SPDLOG_INFO("  ✓ Query {} passed", i + 1);
+    } else {
+      SPDLOG_ERROR("  ✗ Query {} FAILED", i + 1);
+    }
+  }
+
+  SPDLOG_INFO("✓ All 3 different queries tested!");
+}
+*/

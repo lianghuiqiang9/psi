@@ -12,6 +12,9 @@
 namespace psi::ypir {
 using namespace psi::spiral;
 
+// Forward declaration
+class LWEClient;
+
 template <typename T>
 class YPirServer {
  public:
@@ -19,6 +22,7 @@ class YPirServer {
              bool is_simplepir, bool inp_transposed, bool pad_rows_in);
 
   size_t GetDbCols() const;
+  size_t GetDbRowsPadded() const { return params_.DbRowsPadded(); }
   const T* Db() const;
   T* DbMut();
   const Params& GetParams() const { return params_; }
@@ -68,7 +72,22 @@ class YPirServer {
   std::vector<uint64_t> db_buf_;
   bool pad_rows_;
   bool is_simplepir_;
-  bool inp_transposed_;  // 数据库是否为转置存储 (row-major)
+  bool inp_transposed_;
+
+  // Debug fields
+  LWEClient* debug_lwe_client_ = nullptr;
+  std::vector<uint8_t> debug_original_db_;
+  size_t debug_db_rows_ = 0;
+  size_t debug_db_cols_ = 0;
+
+ public:
+  void SetDebugLweClient(LWEClient* client) { debug_lwe_client_ = client; }
+  void SetDebugOriginalDb(const std::vector<uint8_t>& db, size_t rows,
+                          size_t cols) {
+    debug_original_db_ = db;
+    debug_db_rows_ = rows;
+    debug_db_cols_ = cols;
+  }
 };
 
 }  // namespace psi::ypir

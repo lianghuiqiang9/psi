@@ -27,7 +27,7 @@ class LWEClient {
   static LWEClient FromSeed(const LWEParams& lwe_params, const uint128_t seed);
   const std::vector<uint32_t> GetSk() const { return sk_; }
   std::vector<uint32_t> Encrypt(yacl::crypto::Prg<uint64_t>& rng, uint32_t pt);
-  std::vector<uint32_t> EncryptMany(yacl::crypto::Prg<uint64_t>& rng,
+  std::vector<uint32_t> EncryptMany(yacl::crypto::Prg<uint32_t>& rng,
                                     std::vector<uint32_t> v_pt);
   uint32_t Decrypt(const std::vector<uint32_t>& ct) const;
   const LWEParams& LweParams() const { return lwe_params_; }

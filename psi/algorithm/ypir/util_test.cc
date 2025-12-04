@@ -136,9 +136,9 @@ TEST(RLWETest, PackingTest) {
   auto pack_seed = yacl::crypto::SecureRandU128();
   yacl::crypto::Prg<uint64_t> pack_rng(yacl::crypto::SecureRandU128());
   yacl::crypto::Prg<uint64_t> pack_rng_pub(pack_seed);
-  auto pack_pub_params =
-      RawGenExpansionParams(params, client.GetSkRegev(), params.PolyLenLog2(),
-                            params.TExpLeft(), pack_rng, pack_rng_pub);
+  auto pack_pub_params = RawGenerateExpansionParams(
+      params, client.GetSkRegev(), params.PolyLenLog2(), params.TExpLeft(),
+      pack_rng, pack_rng_pub);
 
   auto cts_seed = yacl::crypto::SecureRandU128();
   yacl::crypto::Prg<uint64_t> ct_rng(cts_seed);

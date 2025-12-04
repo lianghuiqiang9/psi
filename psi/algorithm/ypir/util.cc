@@ -159,57 +159,6 @@ std::pair<std::vector<PolyMatrixNtt>, std::vector<PolyMatrixNtt>> GenYConstants(
   return std::make_pair(y_constants, neg_y_constants);
 }
 
-std::vector<PolyMatrixNtt> RawGenExpansionParams(
-    const Params& params, const PolyMatrixRaw& sk_reg, size_t num_exp,
-    size_t m_exp, yacl::crypto::Prg<uint64_t>& rng,
-    yacl::crypto::Prg<uint64_t>& rng_pub) {
-  auto g_exp = util::BuildGadget(params, 1, m_exp);
-  auto g_exp_ntt = ToNtt(params, g_exp);
-
-  std::vector<PolyMatrixNtt> res;
-  DiscreteGaussian dg(params.NoiseWidth());
-
-  for (size_t i = 0; i < num_exp; ++i) {
-    size_t t = (params.PolyLen() / (1ULL << i)) + 1;
-    auto tau_sk_reg = Automorphism(params, sk_reg, t);
-    auto tau_sk_reg_ntt = ToNtt(params, tau_sk_reg);
-    auto prod = Multiply(params, tau_sk_reg_ntt, g_exp_ntt);
-
-    auto m = prod.Cols();
-    auto sample =
-        PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(), 2, m);
-
-    for (size_t j = 0; j < m; ++j) {
-      auto a = PolyMatrixRaw::RandomPrg(params, 1, 1, rng_pub);
-      auto a_ntt = ToNtt(params, a);
-      // Rust uses -a (negation), not invert
-      auto neg_a = PolyMatrixRaw::Zero(params.PolyLen(), a.Rows(), a.Cols());
-      for (size_t idx = 0; idx < a.Data().size(); ++idx) {
-        neg_a.Data()[idx] = params.Modulus() - a.Data()[idx];
-      }
-      auto a_inv = ToNtt(params, neg_a);
-
-      auto e = Noise(params, 1, 1, dg, rng);
-      auto e_ntt = ToNtt(params, e);
-
-      auto sk_reg_ntt = ToNtt(params, sk_reg);
-      auto b_p = Multiply(params, sk_reg_ntt, a_ntt);
-      auto b = Add(params, e_ntt, b_p);
-
-      auto regev_sample =
-          PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(), 2, 1);
-      regev_sample.CopyInto(a_inv, 0, 0);
-      regev_sample.CopyInto(b, 1, 0);
-
-      sample.CopyInto(regev_sample, 0, j);
-    }
-
-    auto w_exp_i = Add(params, sample, prod.PadTop(1));
-    res.push_back(w_exp_i);
-  }
-  return res;
-}
-
 PolyMatrixNtt RingPackLwes(
     const Params& params, const std::vector<uint64_t>& b_values,
     const std::vector<PolyMatrixNtt>& rlwe_cts, size_t num_cts,
@@ -244,9 +193,7 @@ std::vector<uint64_t> NegacyclicPerm(absl::Span<const uint64_t> a, size_t shift,
   std::vector<uint64_t> out(n);
 
   for (size_t i = 0; i <= shift; ++i) {
-    if (shift >= i) {
-      out[i] = a[shift - i];
-    }
+    out[i] = a[shift - i];
   }
 
   for (size_t i = shift + 1; i < n; ++i) {
@@ -283,43 +230,30 @@ PolyMatrixNtt CondenseMatrix(const Params& params, const PolyMatrixNtt& a) {
 
 // from ypir/packing.rs
 PolyMatrixNtt RotationPoly(const Params& params, size_t amount) {
-  // 1. 初始化 1x1 的零矩阵 (系数域)
   PolyMatrixRaw res = PolyMatrixRaw::Zero(params.PolyLen(), 1, 1);
 
-  // 2. 设置指定位置的系数为 1
-  // amount should be < poly_len for proper operation
   if (amount < res.Data().size()) {
     res.Data()[amount] = 1;
   } else {
     YACL_THROW("Rotation amount exceeds polynomial length");
   }
 
-  // 3. 转换到 NTT 域
   return ToNtt(params, res);
 }
 PolyMatrixNtt PackSingleLwe(const Params& params,
                             const std::vector<PolyMatrixNtt>& pub_params,
                             const PolyMatrixNtt& lwe_ct) {
-  // 1. 克隆初始密文
   PolyMatrixNtt cur_r = lwe_ct;
 
   size_t log_n = params.PolyLenLog2();
 
   for (size_t i = 0; i < log_n; ++i) {
-    // 2. 计算自同构索引 t
     size_t t = (params.PolyLen() / (1ULL << i)) + 1;
 
     const auto& pub_param = pub_params[i];
 
-    // 3. 执行同态自同构
-    // Rust: homomorphic_automorph(params, t, params.t_exp_left, &cur_r,
-    // pub_param) 假设 HomomorphicAutomorph 返回一个新的 PolyMatrixNtt
     auto tau_of_r =
         HomomorphicAutomorph(params, t, params.TExpLeft(), cur_r, pub_param);
-
-    // 4. 累加结果
-    // Rust: add_into(&mut cur_r, &tau_of_r);
-    // 假设 AddInto 是原位加法函数，或者 PolyMatrixNtt 重载了 +=
     AddInto(params, cur_r, tau_of_r);
   }
 
@@ -1078,26 +1012,17 @@ PolyMatrixNtt UncondenseMatrix(const Params& params, const PolyMatrixNtt& a) {
   size_t cols = a.Cols();
   size_t poly_len = params.PolyLen();
 
-  // 初始化结果矩阵，大小与 params 一致
-  // 注意：这里的 params 应该描述的是解压后的形状（即多项式长度足够容纳
-  // 2*poly_len 或者有 2 个 CRT 模数）
   PolyMatrixNtt res =
       PolyMatrixNtt::Zero(params.CrtCount(), params.PolyLen(), rows, cols);
 
   for (size_t i = 0; i < rows; ++i) {
     for (size_t j = 0; j < cols; ++j) {
-      // 获取多项式的引用
-      // 假设 GetPoly 返回的是 absl::Span<uint64_t> 或者 std::vector<uint64_t>&
       auto res_poly = res.Poly(i, j);
       const auto a_poly = a.Poly(i, j);
 
       for (size_t z = 0; z < poly_len; ++z) {
         uint64_t val = a_poly[z];
-
-        // 提取低 32 位放入前半部分
         res_poly[z] = val & 0xFFFFFFFFULL;
-
-        // 提取高 32 位放入后半部分 (poly_len 偏移处)
         res_poly[z + poly_len] = val >> 32;
       }
     }

@@ -28,11 +28,6 @@ PolyMatrixNtt RingPackLwesInner(
 std::pair<std::vector<PolyMatrixNtt>, std::vector<PolyMatrixNtt>> GenYConstants(
     const Params& params);
 
-std::vector<PolyMatrixNtt> RawGenExpansionParams(
-    const Params& params, const PolyMatrixRaw& sk_reg, size_t num_exp,
-    size_t m_exp, yacl::crypto::Prg<uint64_t>& rng,
-    yacl::crypto::Prg<uint64_t>& rng_pub);
-
 PolyMatrixNtt RingPackLwes(
     const Params& params, const std::vector<uint64_t>& b_values,
     const std::vector<PolyMatrixNtt>& rlwe_cts, size_t num_cts,

@@ -33,63 +33,46 @@ constexpr uint8_t SEED_1 = 1;
 
 static constexpr uint128_t kStaticSeed2 = yacl::MakeUint128(0, 2);
 
-void WriteBits(absl::Span<uint8_t> data, uint64_t val, size_t bit_offs,
-               size_t num_bits) {
+// Helper functions for bit manipulation (copied from client.cc)
+static void WriteBits(absl::Span<uint8_t> data, uint64_t val, size_t bit_offs,
+                      size_t num_bits) {
   size_t byte_index = bit_offs / 8;
   size_t bit_index = bit_offs % 8;
 
   while (num_bits > 0 && byte_index < data.size()) {
     size_t bits_to_write = std::min(size_t(8) - bit_index, num_bits);
-
     uint8_t bitmask = (1 << bits_to_write) - 1;
-
     uint8_t bits = static_cast<uint8_t>((val & bitmask) << bit_index);
-
     data[byte_index] |= bits;
-
     num_bits -= bits_to_write;
     bit_index += bits_to_write;
-
     if (bit_index == 8) {
       byte_index += 1;
       bit_index = 0;
     }
-
     val >>= bits_to_write;
   }
 }
 
-uint64_t ReadBits(absl::Span<const uint8_t> data, size_t bit_offs,
-                  size_t num_bits) {
-  if (num_bits > 64 || num_bits == 0) {
-    throw std::invalid_argument("Invalid number of bits: " +
-                                std::to_string(num_bits));
-  }
-
+static uint64_t ReadBits(absl::Span<const uint8_t> data, size_t bit_offs,
+                         size_t num_bits) {
+  uint64_t result = 0;
   size_t byte_index = bit_offs / 8;
   size_t bit_index = bit_offs % 8;
-
-  uint64_t result = 0;
   size_t bits_read = 0;
 
   while (bits_read < num_bits && byte_index < data.size()) {
-    size_t can_take = std::min(size_t(8) - bit_index, num_bits - bits_read);
-
-    uint8_t mask = (1 << can_take) - 1;
-
-    uint64_t value = (data[byte_index] >> bit_index) & mask;
-
-    result |= (value << bits_read);
-
-    bits_read += can_take;
-    bit_index += can_take;
-
+    size_t bits_to_read = std::min(size_t(8) - bit_index, num_bits - bits_read);
+    uint8_t bitmask = (1 << bits_to_read) - 1;
+    uint8_t bits = (data[byte_index] >> bit_index) & bitmask;
+    result |= (static_cast<uint64_t>(bits) << bits_read);
+    bits_read += bits_to_read;
+    bit_index += bits_to_read;
     if (bit_index == 8) {
-      byte_index++;
+      byte_index += 1;
       bit_index = 0;
     }
   }
-
   return result;
 }
 
@@ -150,7 +133,7 @@ std::vector<uint16_t> SplitAlloc(absl::Span<const uint64_t> buf,
 
 std::vector<PolyMatrixNtt> GenerateFakePackPubParams(const Params& params) {
   auto sk_raw_zero = PolyMatrixRaw::Zero(params.PolyLen(), 1, 1);
-  yacl::crypto::Prg<uint64_t> rng_pub(yacl::crypto::SecureRandU128());
+  yacl::crypto::Prg<uint64_t> rng_pub(yacl::MakeUint128(0, 999));
   yacl::crypto::Prg<uint64_t> rng_priv(kStaticSeed2);
 
   size_t m = params.PolyLenLog2();
@@ -287,21 +270,6 @@ static uint32_t log2_uint64(uint64_t n) {
   if (n == 0) return 0;
   return static_cast<uint32_t>(std::log2(static_cast<double>(n)));
 }
-
-// template <typename T>
-// std::vector<T> TransposeGeneric(const std::vector<T>& input, size_t rows,
-//                                 size_t cols) {
-//   if (input.size() != rows * cols) {
-//     throw std::invalid_argument("TransposeGeneric: Input size mismatch");
-//   }
-//   std::vector<T> output(input.size());
-//   for (size_t r = 0; r < rows; ++r) {
-//     for (size_t c = 0; c < cols; ++c) {
-//       output[c * rows + r] = input[r * cols + c];
-//     }
-//   }
-//   return output;
-// }
 
 template <typename T>
 std::vector<T> TransposeGeneric(const std::vector<T>& a, size_t a_rows,
@@ -459,7 +427,7 @@ std::vector<uint64_t> YPirServer<T>::GenerateHint0Ring() const {
       a[idx] = rng_pub();
     }
 
-    auto nega_perm_a = negacyclic_perm_u32(a);
+    auto nega_perm_a = NegacyclicPermU32(a);
     auto nega_perm_a_ntt = conv.ntt(nega_perm_a);
     v_nega_perm_a.push_back(std::move(nega_perm_a_ntt));
   }
@@ -570,6 +538,22 @@ OfflinePrecomputedValues YPirServer<T>::PerformOfflinePrecomputation() {
 
   size_t smaller_cols =
       1ULL << (smaller_params.DbDim2() + smaller_params.PolyLenLog2());
+
+  // Debug: Check smaller_db at row special_offs
+  {
+    const uint16_t* smaller_db_check = smaller_server.Db();
+    size_t db_cols_check = smaller_server.GetDbCols();
+    SPDLOG_INFO(
+        "[DEBUG] Offline: smaller_db at row special_offs={}, db_cols={}",
+        special_offs, db_cols_check);
+    for (size_t col = 0; col < std::min(8UL, db_cols_check); ++col) {
+      // Transposed storage: row special_offs, col j → index (special_offs *
+      // db_cols + j)
+      uint16_t val = smaller_db_check[special_offs * db_cols_check + col];
+      SPDLOG_INFO("[DEBUG]   col={}: val={}", col, val);
+    }
+  }
+
   auto hint_1 = smaller_server.AnswerHintRing(SEED_1, smaller_cols);
 
   auto pseudorandom_query_1 = smaller_server.GeneratePseudorandomQuery(SEED_1);
@@ -617,7 +601,6 @@ OfflinePrecomputedValues YPirServer<T>::PerformOfflinePrecomputation() {
   vals.prepacked_lwe = std::move(prepacked_lwe);
   vals.precomp = std::move(precomp);
 
-  SPDLOG_INFO("DoublePIR offline precomputation complete");
   return vals;
 }
 
@@ -707,9 +690,6 @@ std::vector<std::vector<uint8_t>> YPirServer<T>::PerformOnlineComputation(
 
   size_t out_rows = 1ULL << (smaller_params.DbDim2() + params.PolyLenLog2());
   size_t rho = 1ULL << smaller_params.DbDim2();
-  SPDLOG_INFO("Online: out_rows={}, rho={}, blowup_factor={}, special_offs={}",
-              out_rows, rho, blowup_factor, special_offs);
-
   auto& hint_1_combined = offline_vals.hint_1;
   const auto& pseudorandom_query_1 = offline_vals.pseudorandom_query_1;
 
