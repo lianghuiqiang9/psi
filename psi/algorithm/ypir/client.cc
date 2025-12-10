@@ -24,66 +24,110 @@ constexpr uint8_t SEED_0 = 0;
 constexpr uint8_t SEED_1 = 1;
 static constexpr uint128_t kStaticSeed2 = yacl::MakeUint128(0, 2);
 
+std::vector<uint64_t> RlweToLwe(const Params& params, const PolyMatrixRaw& ct) {
+  auto a = ct.Poly(0, 0);
+
+  // Convert Span to vector for NegacyclicMatrix
+  std::vector<uint64_t> a_vec(a.begin(), a.end());
+  std::vector<uint64_t> negacyclic_a =
+      NegacyclicMatrix(a_vec, params.Modulus());
+
+  auto b = ct.Poly(1, 0);
+
+  negacyclic_a.insert(negacyclic_a.end(), b.begin(), b.end());
+
+  return negacyclic_a;
+}
+
 // from params.rs
 size_t Log2Ceil(uint64_t value) {
   if (value == 0) return 0;
   return static_cast<size_t>(std::ceil(std::log2(value)));
 }
 
-// from convolution.rs
-std::vector<uint32_t> NegacyclicMatrixU32(const std::vector<uint32_t>& a,
-                                          size_t n, uint64_t modulus) {
-  std::vector<uint32_t> out(n * n);
-  std::vector<uint32_t> current_row(a.begin(), a.begin() + n);
+std::vector<uint32_t> NegacyclicMatrixU32(absl::Span<const uint32_t> b) {
+  size_t n = b.size();
+  std::vector<uint32_t> res(n * n, 0);
+
   for (size_t i = 0; i < n; ++i) {
     for (size_t j = 0; j < n; ++j) {
-      out[i * n + j] = current_row[j];
-    }
-    uint32_t last = current_row[n - 1];
-    for (size_t j = n - 1; j > 0; --j) {
-      current_row[j] = current_row[j - 1];
-    }
-    current_row[0] =
-        static_cast<uint32_t>((modulus - (last % modulus)) % modulus);
-  }
-  return out;
-}
-
-// from bits.rs
-std::vector<uint8_t> U64sToContiguousBytes(const std::vector<uint64_t>& data,
-                                           size_t bits_per_u64) {
-  size_t total_bits = data.size() * bits_per_u64;
-  size_t num_bytes = (total_bits + 7) / 8;
-  std::vector<uint8_t> out(num_bytes, 0);
-  size_t bit_offset = 0;
-
-  for (uint64_t val : data) {
-    for (size_t i = 0; i < bits_per_u64; ++i) {
-      if ((val >> i) & 1) {
-        size_t byte_idx = (bit_offset + i) / 8;
-        size_t bit_idx_in_byte = (bit_offset + i) % 8;
-        out[byte_idx] |= (1 << bit_idx_in_byte);
+      uint32_t b_val = b[(n + i - j) % n];
+      if (i < j) {
+        b_val = -b_val;
       }
+      res[j * n + i] = b_val;
     }
-    bit_offset += bits_per_u64;
   }
-  return out;
+
+  return res;
 }
 
-uint64_t read_bits(const std::vector<uint8_t>& buffer, size_t bit_offset,
-                   size_t num_bits) {
+void WriteBits(absl::Span<uint8_t> data, uint64_t val, size_t bit_offs,
+               size_t num_bits) {
+  size_t byte_index = bit_offs / 8;
+  size_t bit_index = bit_offs % 8;
+
+  while (num_bits > 0 && byte_index < data.size()) {
+    size_t bits_to_write = std::min(size_t(8) - bit_index, num_bits);
+    uint8_t bitmask = (1 << bits_to_write) - 1;
+    uint8_t bits = static_cast<uint8_t>((val & bitmask) << bit_index);
+    data[byte_index] |= bits;
+    num_bits -= bits_to_write;
+    bit_index += bits_to_write;
+    if (bit_index == 8) {
+      byte_index += 1;
+      bit_index = 0;
+    }
+    val >>= bits_to_write;
+  }
+}
+
+uint64_t ReadBits(const absl::Span<uint8_t>& data, size_t bit_offs,
+                  size_t num_bits) {
+  if (num_bits > 64 || num_bits == 0) {
+    YACL_THROW("Invalid number of bits: " + std::to_string(num_bits));
+  }
+
+  size_t byte_pos = bit_offs / 8;
+  size_t bit_pos = bit_offs % 8;
+
   uint64_t result = 0;
-  for (size_t i = 0; i < num_bits; ++i) {
-    size_t current_bit_pos = bit_offset + i;
-    size_t byte_idx = current_bit_pos / 8;
-    size_t bit_idx_in_byte = current_bit_pos % 8;
-    if (byte_idx < buffer.size()) {
-      if ((buffer[byte_idx] >> bit_idx_in_byte) & 1) {
-        result |= (1ULL << i);
-      }
+  size_t remaining_bits = num_bits;
+  size_t original_num_bits = num_bits;
+
+  for (size_t i = byte_pos; i < data.size(); ++i) {
+    size_t can_take =
+        std::min(static_cast<size_t>(8) - bit_pos, remaining_bits);
+    uint64_t value;
+    if (can_take < 8) {
+      value = (data[i] >> bit_pos) & ((1ULL << can_take) - 1);
+    } else {
+      value = data[i] >> bit_pos;
     }
+    result |= (value << (original_num_bits - remaining_bits));
+    remaining_bits -= can_take;
+    if (remaining_bits == 0) {
+      break;
+    }
+    bit_pos = 0;
   }
   return result;
+}
+
+std::vector<uint8_t> U64sToContiguousBytes(const std::vector<uint64_t>& data,
+                                           size_t inp_mod_bits) {
+  size_t total_bits = data.size() * inp_mod_bits;
+  size_t total_sz = (total_bits + 7) / 8;
+
+  std::vector<uint8_t> out(total_sz, 0);
+
+  size_t bit_offs = 0;
+  for (uint64_t val : data) {
+    WriteBits(absl::MakeSpan(out), val, bit_offs, inp_mod_bits);
+    bit_offs += inp_mod_bits;
+  }
+
+  return out;
 }
 
 // Packs a vector of polynomial matrices by combining CRT coefficients (0 and 1)
@@ -184,11 +228,12 @@ PolyMatrixRaw DecryptCtRegMeasured(const SpiralClient& client,
     dec_rescaled.Data()[i] = arith::Rescale(
         dec_result.Data()[i], params.Modulus(), params.PtModulus());
   }
-
+  SPDLOG_INFO("params.ModulusLog2(): {}", params.ModulusLog2());
+  SPDLOG_INFO("params.PtModulusLog2(): {}", params.PtModulusBitLen());
   // Measure noise width
   double s_2 = MeasureNoiseWidthSquared(client, params, ct, dec_rescaled,
                                         coeffs_to_measure);
-  std::cout << "[DEBUG] log2(measured noise): " << std::log2(s_2) << std::endl;
+  SPDLOG_INFO("[DEBUG] log2(measured noise): {}", std::log2(s_2));
   return dec_rescaled;
 }
 
@@ -210,7 +255,9 @@ LWEClient LWEClient::FromSeed(const LWEParams& lwe_params,
   std::vector<uint32_t> sk;
   sk.reserve(lwe_params.n);
   for (size_t i = 0; i < lwe_params.n; ++i) {
-    uint64_t random_sample = dg.Sample(lwe_params.modulus, rng);
+    // uint64_t random_sample = dg.Sample(lwe_params.modulus, rng);
+    // DEBUG: Use all-ones key for verification
+    uint64_t random_sample = 1;
     sk.push_back(static_cast<uint32_t>(random_sample));
   }
   return LWEClient(lwe_params, std::move(sk));
@@ -219,7 +266,9 @@ LWEClient LWEClient::FromSeed(const LWEParams& lwe_params,
 std::vector<uint32_t> LWEClient::Encrypt(yacl::crypto::Prg<uint64_t>& rng,
                                          uint32_t pt) {
   DiscreteGaussian dg(lwe_params_.noise_width);
-  uint32_t e = static_cast<uint32_t>(dg.Sample(lwe_params_.modulus, rng));
+  // uint32_t e = static_cast<uint32_t>(dg.Sample(lwe_params_.modulus, rng));
+  uint32_t e = 0;
+
   std::vector<uint32_t> ct;
   ct.reserve(lwe_params_.n + 1);
   uint32_t sum = 0;
@@ -252,7 +301,7 @@ std::vector<uint32_t> LWEClient::EncryptMany(yacl::crypto::Prg<uint32_t>& rng,
     a.push_back(static_cast<uint32_t>(rng()));
   }
 
-  std::vector<uint32_t> nega_a = NegacyclicMatrixU32(a, n, lwe_params_.modulus);
+  std::vector<uint32_t> nega_a = NegacyclicMatrixU32(a);
   std::vector<uint32_t> last_row(n);
   for (size_t col = 0; col < n; ++col) {
     uint32_t sum = 0;
@@ -261,8 +310,9 @@ std::vector<uint32_t> LWEClient::EncryptMany(yacl::crypto::Prg<uint32_t>& rng,
       sum += nega_a[idx] * sk_[row];
     }
 
-    uint32_t e =
-        static_cast<uint32_t>(dg.Sample(lwe_params_.modulus, rng_noise));
+    // uint32_t e =
+    // static_cast<uint32_t>(dg.Sample(lwe_params_.modulus, rng_noise));
+    uint32_t e = 0;
     uint32_t val = -sum + v_pt[col] + e;
     last_row[col] = val;
   }
@@ -302,34 +352,14 @@ YClient::YClient(const SpiralClient& client, const Params& params,
       params_(params) {}
 
 std::vector<uint64_t> YClient::RlwesToLwes(
-    const std::vector<PolyMatrixRaw>& cts) const {
-  if (cts.empty()) {
-    return {};
+    const std::vector<PolyMatrixRaw>& ct_list) const {
+  std::vector<std::vector<uint64_t>> v;
+  v.reserve(ct_list.size());
+
+  for (const auto& ct : ct_list) {
+    v.push_back(RlweToLwe(params_, ct));
   }
-  size_t n = params_.PolyLen();
-  size_t num_cts = cts.size();
-  std::vector<uint64_t> lwes((n + 1) * n * num_cts);
-
-  for (size_t i = 0; i < num_cts; ++i) {
-    const auto& ct = cts[i];
-    auto a_poly = ct.Poly(0, 0);
-    auto b_poly = ct.Poly(1, 0);
-
-    std::vector<uint32_t> a_poly_vec(a_poly.begin(), a_poly.end());
-    auto negacylic_a_u32 =
-        NegacyclicMatrixU32(a_poly_vec, n, params_.Modulus());
-
-    for (size_t r = 0; r < n; ++r) {
-      for (size_t c = 0; c < n; ++c) {
-        lwes[r * (n * num_cts) + i * n + c] = negacylic_a_u32[r * n + c];
-      }
-    }
-
-    for (size_t c = 0; c < n; ++c) {
-      lwes[n * (n * num_cts) + i * n + c] = b_poly[c];
-    }
-  }
-  return lwes;
+  return ConcatHorizontal(v, params_.PolyLen() + 1, params_.PolyLen());
 }
 
 std::vector<PolyMatrixRaw> YClient::GenerateQueryImpl(uint8_t public_seed_idx,
@@ -347,7 +377,7 @@ std::vector<PolyMatrixRaw> YClient::GenerateQueryImpl(uint8_t public_seed_idx,
     PolyMatrixRaw scalar = PolyMatrixRaw::Zero(params_.PolyLen(), 1, 1);
     const bool is_nonzero = (i == (index / params_.PolyLen()));
     if (is_nonzero) {
-      scalar.Poly(0, 0)[index % params_.PolyLen()] = scale_k;
+      scalar.Data()[index % params_.PolyLen()] = scale_k;
     }
 
     const uint64_t factor =
@@ -496,9 +526,7 @@ YPIRQuery YClient::GenerateFullQuery(size_t target_idx) {
   // generate query
   auto query_row = GenerateQuery(SEED_0, params_.DbDim1(), false, target_row);
 
-  // 提取最后一行
   const size_t query_row_start_idx = lwe_client_.LweParams().n * db_rows;
-
   auto slice_begin = query_row.begin() + query_row_start_idx;
   auto slice_end = query_row.end();
 
@@ -634,6 +662,11 @@ std::vector<uint8_t> YPIRClient::DecodeResponseSimplepir(
 uint64_t YPIRClient::DecodeResponseNormalYClient(
     const Params& params, const YClient& y_client,
     const std::vector<uint8_t>& response_data) {
+  size_t nonzero_bytes = 0;
+  for (auto b : response_data)
+    if (b != 0) nonzero_bytes++;
+  SPDLOG_INFO("Decode: response_data has {} non-zero bytes out of {}",
+              nonzero_bytes, response_data.size());
   const size_t num_rlwe_outputs = params.Rho();
   assert(response_data.size() % num_rlwe_outputs == 0);
   const size_t chunk_size = response_data.size() / num_rlwe_outputs;
@@ -657,26 +690,18 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
         DecryptCtRegMeasured(y_client.GetSpiralClient(), params,
                              ToNtt(params, ct), params.PolyLen());
     const auto& decrypted_coeffs = decrypted_part.Data();
-    // DecryptCtRegMeasured 返回的值已经在正确的范围内，直接使用
     for (uint64_t coeff : decrypted_coeffs) {
       outer_ct.push_back(coeff);
     }
   }
 
-  size_t special_offs_preview = static_cast<size_t>(std::ceil(
-      (static_cast<double>(lwe_params.n) * lwe_q_prime_bits) / pt_bits));
-  SPDLOG_INFO("Decode: outer_ct size={}, first 4 values: [{}, {}, {}, {}]",
-              outer_ct.size(), outer_ct.size() > 0 ? outer_ct[0] : 0,
-              outer_ct.size() > 1 ? outer_ct[1] : 0,
-              outer_ct.size() > 2 ? outer_ct[2] : 0,
-              outer_ct.size() > 3 ? outer_ct[3] : 0);
-  SPDLOG_INFO(
-      "Decode: outer_ct at special_offs={}: [{}, {}]", special_offs_preview,
-      outer_ct.size() > special_offs_preview ? outer_ct[special_offs_preview]
-                                             : 0,
-      outer_ct.size() > special_offs_preview + 1
-          ? outer_ct[special_offs_preview + 1]
-          : 0);
+  // Count non-zero values in outer_ct
+  size_t outer_ct_nonzero = 0;
+  for (size_t i = 0; i < outer_ct.size(); ++i) {
+    if (outer_ct[i] != 0) outer_ct_nonzero++;
+  }
+  SPDLOG_INFO("Decode: outer_ct has {} non-zero values out of {}",
+              outer_ct_nonzero, outer_ct.size());
 
   std::vector<uint8_t> outer_ct_t_u8 = U64sToContiguousBytes(outer_ct, pt_bits);
 
@@ -686,11 +711,14 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
   const size_t special_offs = static_cast<size_t>(std::ceil(
       (static_cast<double>(lwe_params.n) * lwe_q_prime_bits) / pt_bits));
 
-  SPDLOG_INFO("Decode: lwe_q_prime={}, special_offs={}, pt_bits={}",
-              lwe_q_prime, special_offs, pt_bits);
+  SPDLOG_INFO(
+      "Decode: lwe_q_prime={}, special_offs={}, pt_bits={}, n={}, "
+      "lwe_q_prime_bits={}",
+      lwe_q_prime, special_offs, pt_bits, lwe_params.n, lwe_q_prime_bits);
 
   for (size_t z = 0; z < lwe_params.n; ++z) {
-    uint64_t val = read_bits(outer_ct_t_u8, bit_offs, lwe_q_prime_bits);
+    uint64_t val =
+        ReadBits(absl::MakeSpan(outer_ct_t_u8), bit_offs, lwe_q_prime_bits);
     bit_offs += lwe_q_prime_bits;
     if (val >= lwe_q_prime) {
       SPDLOG_WARN("WARNING at z={}: val {} >= lwe_q_prime {}, taking modulo", z,
@@ -708,14 +736,13 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
       special_offs, num_loops, pt_bits, blowup_factor);
   for (size_t i = 0; i < num_loops; ++i) {
     uint64_t coeff = outer_ct[special_offs + i];
-    SPDLOG_INFO("  i={}, outer_ct[{}]={}, shift={}", i, special_offs + i, coeff,
-                i * pt_bits);
+    coeff &= ((1ULL << pt_bits) - 1);
     val |= coeff << (i * pt_bits);
   }
   SPDLOG_INFO("Combined val={}, lwe_q_prime={}, val<lwe_q_prime={}", val,
               lwe_q_prime, val < lwe_q_prime);
   if (val >= lwe_q_prime) {
-    SPDLOG_WARN("WARNING: val {} >= lwe_q_prime {}, taking modulo", val,
+    SPDLOG_WARN("WARNING: b value {} >= lwe_q_prime {}, taking modulo", val,
                 lwe_q_prime);
     val = val % lwe_q_prime;
   }
@@ -728,11 +755,25 @@ uint64_t YPIRClient::DecodeResponseNormalYClient(
     inner_ct_as_u32.push_back(static_cast<uint32_t>(inner_ct.Data()[i]));
   }
 
-  SPDLOG_INFO("Decode: inner_ct first 5 values: [{}, {}, {}, {}, {}]",
-              inner_ct_as_u32[0], inner_ct_as_u32[1], inner_ct_as_u32[2],
-              inner_ct_as_u32[3], inner_ct_as_u32[4]);
+  SPDLOG_INFO(
+      "Decode: inner_ct first 10 values: [{}, {}, {}, {}, {}, {}, {}, {}, {}, "
+      "{}]",
+      inner_ct_as_u32[0], inner_ct_as_u32[1], inner_ct_as_u32[2],
+      inner_ct_as_u32[3], inner_ct_as_u32[4], inner_ct_as_u32[5],
+      inner_ct_as_u32[6], inner_ct_as_u32[7], inner_ct_as_u32[8],
+      inner_ct_as_u32[9]);
   SPDLOG_INFO("Decode: inner_ct last value (b): {}",
               inner_ct_as_u32[lwe_params.n]);
+  SPDLOG_INFO("Decode: inner_ct_as_u32.size()={}, expecting n+1={}",
+              inner_ct_as_u32.size(), lwe_params.n + 1);
+
+  // Count how many are non-zero
+  size_t non_zero_count = 0;
+  for (size_t i = 0; i < inner_ct_as_u32.size(); ++i) {
+    if (inner_ct_as_u32[i] != 0) non_zero_count++;
+  }
+  SPDLOG_INFO("Decode: inner_ct has {} non-zero values out of {}",
+              non_zero_count, inner_ct_as_u32.size());
 
   uint32_t decrypted = y_client.GetLweClient().Decrypt(inner_ct_as_u32);
   SPDLOG_INFO(

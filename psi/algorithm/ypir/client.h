@@ -52,7 +52,7 @@ class YClient {
   const Params params_;
 
   std::vector<uint64_t> RlwesToLwes(
-      const std::vector<spiral::PolyMatrixRaw>& ct) const;
+      const std::vector<PolyMatrixRaw>& ct) const;
 
   std::vector<uint64_t> GenerateQueryLweLowMem(uint8_t public_seed_idx,
                                                size_t dim_log2, bool packing,

@@ -9,6 +9,9 @@
 namespace psi::ypir {
 
 using namespace psi::spiral;
+std::vector<uint64_t> ConcatHorizontal(
+    const std::vector<std::vector<uint64_t>>& v_a, size_t a_rows,
+    size_t a_cols);
 
 void MatMulVecPacked(uint32_t* out, const uint32_t* a, const uint32_t* b,
                      size_t a_rows, size_t a_cols, size_t b_rows,
@@ -37,6 +40,8 @@ PolyMatrixNtt RingPackLwes(
 
 std::vector<uint64_t> NegacyclicPerm(absl::Span<const uint64_t> a, size_t shift,
                                      uint64_t modulus);
+std::vector<uint64_t> NegacyclicMatrix(absl::Span<const uint64_t> a,
+                                       uint64_t modulus);
 PolyMatrixNtt CondenseMatrix(const Params& params, const PolyMatrixNtt& a);
 PolyMatrixNtt UncondenseMatrix(const Params& params, const PolyMatrixNtt& a);
 PolyMatrixNtt PackUsingSingleWithOffset(

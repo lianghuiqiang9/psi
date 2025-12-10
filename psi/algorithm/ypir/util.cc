@@ -19,6 +19,31 @@ namespace psi::ypir {
 
 using namespace psi::spiral;
 
+std::vector<uint64_t> ConcatHorizontal(
+    const std::vector<std::vector<uint64_t>>& v_a, size_t a_rows,
+    size_t a_cols) {
+  if (v_a.empty()) {
+    return {};
+  }
+
+  size_t num_vecs = v_a.size();
+
+  std::vector<uint64_t> out(a_rows * a_cols * num_vecs);
+  size_t out_stride = num_vecs * a_cols;
+
+  for (size_t i = 0; i < a_rows; ++i) {
+    for (size_t k = 0; k < num_vecs; ++k) {
+      auto src_begin = v_a[k].begin() + (i * a_cols);
+      auto src_end = src_begin + a_cols;
+      size_t dest_offset = (i * out_stride) + (k * a_cols);
+
+      std::copy(src_begin, src_end, out.begin() + dest_offset);
+    }
+  }
+
+  return out;
+}
+
 extern "C" {
 void matMulVecPacked(uint32_t* out, const uint32_t* a, const uint32_t* b,
                      size_t aRows, size_t aCols);
@@ -203,6 +228,21 @@ std::vector<uint64_t> NegacyclicPerm(absl::Span<const uint64_t> a, size_t shift,
       out[i] = 0;
     } else {
       out[i] = modulus - val;
+    }
+  }
+
+  return out;
+}
+
+std::vector<uint64_t> NegacyclicMatrix(absl::Span<const uint64_t> a,
+                                       uint64_t modulus) {
+  size_t n = a.size();
+  std::vector<uint64_t> out(n * n, 0);
+
+  for (size_t i = 0; i < n; ++i) {
+    std::vector<uint64_t> perm = NegacyclicPerm(a, i, modulus);
+    for (size_t j = 0; j < n; ++j) {
+      out[j * n + i] = perm[j];
     }
   }
 
