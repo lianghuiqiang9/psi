@@ -1,0 +1,36 @@
+load("//bazel:psi.bzl", "psi_cc_binary", "psi_cc_library", "psi_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+psi_cc_library(
+    name = "phe_pir_utils",
+    srcs = ["phe_pir_utils.cc"],
+    hdrs = ["phe_pir_utils.h"],
+    deps = [
+        "@yacl//yacl/math/mpint",
+    ],
+)
+
+psi_cc_library(
+    name = "phe_pir",
+    srcs = ["phe_pir.cc"],
+    hdrs = ["phe_pir.h"],
+    deps = [
+        ":phe_pir_utils",
+        "//psi/algorithm/pir_interface:pir_db",
+        "@yacl//examples/hesm2",
+        "@yacl//yacl/base:buffer",
+        "@yacl//yacl/crypto/ecc:ec_point",
+        "@yacl//yacl/crypto/ecc:spi",
+    ],
+)
+
+psi_cc_test(
+    name = "phe_pir_test",
+    srcs = ["phe_pir_test.cc"],
+    deps = [
+        ":phe_pir",
+        "@yacl//yacl/crypto/ecc/openssl",
+        "@yacl//yacl/crypto/rand",
+    ],
+)
