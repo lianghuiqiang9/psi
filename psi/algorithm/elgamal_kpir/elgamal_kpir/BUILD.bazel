@@ -1,0 +1,25 @@
+
+load("@yacl//bazel:yacl.bzl", "yacl_cc_library", "yacl_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+test_suite(
+    name = "elgamal_kpir_tests",
+)
+
+yacl_cc_library(
+    name = "elgamal_kpir",
+    srcs = ["kpir.cc"],
+    hdrs = ["kpir.h"],
+    deps = [
+        "//heu/library/algorithms/elgamal:elgamal",
+    ],
+)
+
+yacl_cc_test(
+    name = "kpir_test",
+    srcs = ["kpir_test.cc"],
+    deps = [
+        ":elgamal_kpir",
+    ],
+)

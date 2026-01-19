@@ -2080,7 +2080,7 @@
     },
     "@@rules_rust~//rust:extensions.bzl%rust": {
       "general": {
-        "bzlTransitiveDigest": "7krOQpdkyGU7vTFdoA+v1CWKu19FhG0bsncUZz7y4fM=",
+        "bzlTransitiveDigest": "Cv1orM7OXqWBGtp9bazN/QGUb6+gJPn0IfBfskP2MPQ=",
         "usagesDigest": "rV+PuweiVabXYal8kLLNKaL4Tx6LbDJmoCxxMI6XmeA=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
